@@ -1,0 +1,357 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:../dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ---------------------------------------------------------------
+// Existing Enums
+// ---------------------------------------------------------------
+
+enum Role {
+  TEACHER
+  STUDENT
+}
+
+// ---------------------------------------------------------------
+// Workspace Enums (new)
+// ---------------------------------------------------------------
+
+enum WorkspaceRole {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+enum QuizQuestionType {
+  MCQ
+  TRUE_FALSE
+  CODING
+  FILL_BLANK
+}
+
+enum QuizDifficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+// ---------------------------------------------------------------
+// Existing Models (unchanged except adding back-relations)
+// ---------------------------------------------------------------
+
+model User {
+  id           String         @id @default(uuid())
+  email        String         @unique
+  name         String
+  passwordHash String
+  avatar       String?
+  role         Role           @default(STUDENT)
+  createdAt    DateTime       @default(now())
+
+  tokens        RefreshToken[]
+  classrooms    Classroom[]          @relation("TeacherClassrooms")
+  attendances   Attendance[]
+  submissions   QuizSubmission[]
+
+  // Workspace back-relations
+  notebooks         Notebook[]         @relation("NotebookOwner")
+  notebookMembers   NotebookMember[]
+  notebookFiles     NotebookFile[]     @relation("FileOwner")
+  annotations       Annotation[]       @relation("AnnotationAuthor")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model Classroom {
+  id              String         @id @default(uuid())
+  roomCode        String         @unique
+  title           String
+  description     String?
+  teacherId       String
+  teacher         User           @relation("TeacherClassrooms", fields: [teacherId], references: [id])
+  isEnded         Boolean        @default(false)
+  maxParticipants Int            @default(4)
+  syllabusText    String?
+  createdAt       DateTime       @default(now())
+
+  sessionState    SessionState?
+  attendances     Attendance[]
+  quizzes         Quiz[]
+  recordings      Recording[]
+}
+
+model SessionState {
+  id                 String    @id @default(uuid())
+  roomId             String    @unique
+  classroom          Classroom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  whiteboardData     String?
+  notesData          String?
+  currentTopic       String?
+  lectureHistoryJson String?
+  updatedAt          DateTime  @updatedAt
+}
+
+model Attendance {
+  id             String    @id @default(uuid())
+  classroomId    String
+  classroom      Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userName       String
+  joinTime       DateTime  @default(now())
+  exitTime       DateTime?
+  totalDuration  Int       @default(0)
+  reconnectCount Int       @default(0)
+  isIdle         Boolean   @default(false)
+}
+
+model Quiz {
+  id            String           @id @default(uuid())
+  classroomId   String
+  classroom     Classroom        @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  title         String
+  questionsJson String
+  createdAt     DateTime         @default(now())
+  submissions   QuizSubmission[]
+}
+
+model QuizSubmission {
+  id          String   @id @default(uuid())
+  quizId      String
+  quiz        Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userName    String
+  score       Int
+  answersJson String
+  submittedAt DateTime @default(now())
+}
+
+model Recording {
+  id          String    @id @default(uuid())
+  classroomId String
+  classroom   Classroom @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  videoUrl    String
+  duration    Int
+  summaryText String?
+  createdAt   DateTime  @default(now())
+}
+
+// ---------------------------------------------------------------
+// AI Study Workspace Models (new)
+// ---------------------------------------------------------------
+
+model Notebook {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  icon        String?
+  color       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  ownerId     String
+
+  owner       User             @relation("NotebookOwner", fields: [ownerId], references: [id])
+  members     NotebookMember[]
+  files       NotebookFile[]
+  chats       ChatSession[]
+  flashcards  Flashcard[]
+  quizzes     WorkspaceQuiz[]
+  bookmarks   Bookmark[]
+  highlights  Highlight[]
+  annotations Annotation[]
+  progress    StudyProgress?
+  audio       AudioOverview?
+  embeddings  Embedding[]
+}
+
+model NotebookMember {
+  id         String        @id @default(cuid())
+  notebookId String
+  userId     String
+  role       WorkspaceRole @default(VIEWER)
+  joinedAt   DateTime      @default(now())
+
+  notebook   Notebook @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notebookId, userId])
+}
+
+model NotebookFile {
+  id         String   @id @default(cuid())
+  notebookId String
+  title      String
+  fileName   String
+  storagePath String
+  size       Int
+  pages      Int?
+  mimeType   String
+  uploadedAt DateTime @default(now())
+  ownerId    String
+  indexed    Boolean  @default(false)
+
+  notebook    Notebook     @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  owner       User         @relation("FileOwner", fields: [ownerId], references: [id])
+  bookmarks   Bookmark[]
+  highlights  Highlight[]
+  annotations Annotation[]
+  embeddings  Embedding[]
+}
+
+model ChatSession {
+  id         String        @id @default(cuid())
+  notebookId String
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+  title      String?
+
+  notebook Notebook      @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+}
+
+model ChatMessage {
+  id         String      @id @default(cuid())
+  sessionId  String
+  senderId   String
+  senderName String
+  role       MessageRole @default(USER)
+  content    String
+  isAI       Boolean     @default(false)
+  citations  String?
+  createdAt  DateTime    @default(now())
+
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
+model Flashcard {
+  id         String   @id @default(cuid())
+  notebookId String
+  question   String
+  answer     String
+  sourceRef  String?
+  createdAt  DateTime @default(now())
+
+  notebook Notebook @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+}
+
+model WorkspaceQuiz {
+  id         String         @id @default(cuid())
+  notebookId String
+  title      String
+  difficulty QuizDifficulty @default(MEDIUM)
+  createdAt  DateTime       @default(now())
+
+  notebook  Notebook       @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  questions WorkspaceQuizQuestion[]
+}
+
+model WorkspaceQuizQuestion {
+  id          String           @id @default(cuid())
+  quizId      String
+  type        QuizQuestionType @default(MCQ)
+  question    String
+  optionsJson String
+  correctAns  String
+  explanation String?
+
+  quiz WorkspaceQuiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+}
+
+model Bookmark {
+  id         String   @id @default(cuid())
+  notebookId String
+  fileId     String
+  page       Int
+  note       String?
+  createdAt  DateTime @default(now())
+
+  notebook Notebook     @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  file     NotebookFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+}
+
+model Highlight {
+  id         String   @id @default(cuid())
+  notebookId String
+  fileId     String
+  page       Int
+  text       String
+  color      String   @default("#FFFF00")
+  note       String?
+  createdAt  DateTime @default(now())
+
+  notebook Notebook     @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  file     NotebookFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+}
+
+model Annotation {
+  id         String   @id @default(cuid())
+  notebookId String
+  fileId     String
+  authorId   String
+  page       Int
+  content    String
+  posX       Float    @default(0)
+  posY       Float    @default(0)
+  createdAt  DateTime @default(now())
+
+  notebook Notebook     @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  file     NotebookFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  author   User         @relation("AnnotationAuthor", fields: [authorId], references: [id])
+}
+
+model StudyProgress {
+  id            String   @id @default(cuid())
+  notebookId    String   @unique
+  studyMinutes  Int      @default(0)
+  docsRead      Int      @default(0)
+  questionsAsked Int     @default(0)
+  quizzesTaken  Int      @default(0)
+  streak        Int      @default(0)
+  lastActiveAt  DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  notebook Notebook @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+}
+
+model AudioOverview {
+  id         String   @id @default(cuid())
+  notebookId String   @unique
+  audioUrl   String
+  duration   Int      @default(0)
+  script     String?
+  createdAt  DateTime @default(now())
+
+  notebook Notebook @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+}
+
+model Embedding {
+  id         String   @id @default(cuid())
+  notebookId String
+  fileId     String
+  chunk      String
+  page       Int      @default(1)
+  paragraph  Int      @default(1)
+  vectorJson String
+  createdAt  DateTime @default(now())
+
+  notebook Notebook     @relation(fields: [notebookId], references: [id], onDelete: Cascade)
+  file     NotebookFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+}

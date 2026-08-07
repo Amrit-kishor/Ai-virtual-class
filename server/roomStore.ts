@@ -1,0 +1,156 @@
+import { Participant, ChatMessage, WhiteboardElement, LectureTopic } from '../src/types';
+import { prisma } from '../src/lib/prisma';
+import { logger } from './logger';
+
+export interface RoomState {
+  code: string;
+  teacherId: string;
+  maxParticipants: number;
+  isEnded: boolean;
+  participants: Map<string, Participant>; // key: socketId
+  whiteboardElements: WhiteboardElement[];
+  chatMessages: ChatMessage[];
+  notesText: string;
+  topics: LectureTopic[];
+  currentTopicIndex: number;
+  isPublicAI: boolean;
+  activeQuiz: unknown | null;
+}
+
+class RoomStoreManager {
+  private rooms: Map<string, RoomState> = new Map();
+
+  public async getOrCreateRoom(code: string, teacherId: string): Promise<RoomState> {
+    if (this.rooms.has(code)) {
+      return this.rooms.get(code)!;
+    }
+
+    // Attempt DB Lookup for persistent restoration
+    let roomInDb = null;
+    try {
+      roomInDb = await prisma.classroom.findUnique({
+        where: { roomCode: code },
+        include: { sessionState: true, teacher: true },
+      });
+    } catch (err: unknown) {
+      logger.warn({ code, err }, 'DB lookup failed, operating in resilient mode');
+    }
+
+    let actualTeacherId = teacherId;
+    let maxParticipants = 4;
+    let isEnded = false;
+    let whiteboardElements: WhiteboardElement[] = [];
+    let notesText = '# AI Classroom Notes\n\n- Class initialized.\n- Auto-notes active.';
+    let topics: LectureTopic[] = [];
+    let currentTopicIndex = 0;
+
+    if (roomInDb) {
+      actualTeacherId = roomInDb.teacherId;
+      maxParticipants = roomInDb.maxParticipants;
+      isEnded = roomInDb.isEnded;
+
+      if (roomInDb.sessionState) {
+        try {
+          if (roomInDb.sessionState.whiteboardData) {
+            whiteboardElements = JSON.parse(roomInDb.sessionState.whiteboardData);
+          }
+          if (roomInDb.sessionState.notesData) {
+            notesText = roomInDb.sessionState.notesData;
+          }
+          if (roomInDb.sessionState.lectureHistoryJson) {
+            topics = JSON.parse(roomInDb.sessionState.lectureHistoryJson);
+          }
+        } catch (e: unknown) {
+          logger.error({ code, error: e }, 'Failed to parse session state JSON');
+        }
+      }
+    } else {
+      // Create DB record if possible
+      try {
+        const created = await prisma.classroom.create({
+          data: {
+            roomCode: code,
+            title: `Classroom ${code}`,
+            teacherId: teacherId,
+            maxParticipants,
+            sessionState: {
+              create: {
+                notesData: notesText,
+              },
+            },
+          },
+        });
+        actualTeacherId = created.teacherId;
+      } catch (err: unknown) {
+        logger.warn({ code, teacherId }, 'Classroom DB creation bypassed');
+      }
+    }
+
+    const roomState: RoomState = {
+      code,
+      teacherId: actualTeacherId,
+      maxParticipants,
+      isEnded,
+      participants: new Map(),
+      whiteboardElements,
+      chatMessages: [],
+      notesText,
+      topics,
+      currentTopicIndex,
+      isPublicAI: false,
+      activeQuiz: null,
+    };
+
+    this.rooms.set(code, roomState);
+    return roomState;
+  }
+
+  public getRoom(code: string): RoomState | undefined {
+    return this.rooms.get(code);
+  }
+
+  public async persistRoomState(code: string): Promise<void> {
+    const room = this.rooms.get(code);
+    if (!room) return;
+
+    try {
+      await prisma.sessionState.upsert({
+        where: { roomId: room.code },
+        update: {
+          whiteboardData: JSON.stringify(room.whiteboardElements),
+          notesData: room.notesText,
+          lectureHistoryJson: JSON.stringify(room.topics),
+        },
+        create: {
+          roomId: room.code,
+          whiteboardData: JSON.stringify(room.whiteboardElements),
+          notesData: room.notesText,
+          lectureHistoryJson: JSON.stringify(room.topics),
+        },
+      });
+    } catch (err: unknown) {
+      // Non-blocking fallback
+    }
+  }
+
+  public removeSocketFromRoom(roomCode: string, socketId: string): Participant | undefined {
+    const room = this.rooms.get(roomCode);
+    if (!room) return undefined;
+
+    const participant = room.participants.get(socketId);
+    if (participant) {
+      room.participants.delete(socketId);
+      logger.info({ roomCode, socketId, userId: participant.userId }, 'Participant socket removed');
+    }
+    return participant;
+  }
+
+  public getUniqueParticipantCount(roomCode: string): number {
+    const room = this.rooms.get(roomCode);
+    if (!room) return 0;
+    const uniqueUserIds = new Set(Array.from(room.participants.values()).map((p) => p.userId));
+    return uniqueUserIds.size;
+  }
+}
+
+export const roomStore = new RoomStoreManager();
