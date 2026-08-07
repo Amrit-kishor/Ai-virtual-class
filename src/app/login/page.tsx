@@ -1,12 +1,15 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+// src/app/login/page.tsx
+// Authentication page wrapped in Suspense boundary to satisfy Next.js CSR bailout prerender requirements
+
+import React, { useState, Suspense } from 'react';
 import { UserProfile } from '@/types';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Sparkles, ArrowRight, ShieldCheck, User, Lock, Mail, Github } from 'lucide-react';
+import { Sparkles, ArrowRight, User, Lock, Mail, Github } from 'lucide-react';
 import { safeFetchJson } from '@/lib/utils';
 
-export default function LoginPage() {
+function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialTab = searchParams.get('tab') === 'signup' ? 'signup' : 'login';
@@ -223,5 +226,17 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400 text-xs">
+        Loading...
+      </div>
+    }>
+      <LoginContent />
+    </Suspense>
   );
 }
