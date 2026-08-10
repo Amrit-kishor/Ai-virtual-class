@@ -1,6 +1,6 @@
 // src/lib/videoBackgroundProcessor.ts
 // Production-grade client-side real-time video background processor for WebRTC:
-// Supports 'original', 'blur', 'remove', and 'virtual' modes using MediaPipe SelfieSegmentation & Canvas 2D / WebGL compositing.
+// Supports 'original', 'blur', 'remove' (Show Only Me), and 'virtual' modes using MediaPipe SelfieSegmentation & Canvas 2D compositing.
 
 export type BackgroundMode = 'original' | 'blur' | 'remove' | 'virtual';
 
@@ -55,6 +55,7 @@ export class VideoBackgroundProcessor {
   private selfieSegmentation: any = null;
   private animationFrameId: number | null = null;
   private isModelReady = false;
+  private isProcessingFrame = false;
   private isDestroyed = false;
 
   constructor() {
@@ -64,17 +65,23 @@ export class VideoBackgroundProcessor {
   }
 
   private initOffscreenNodes() {
-    if (this.outputCanvas) return;
+    if (this.outputCanvas || typeof document === 'undefined') return;
 
-    // 1. Offscreen Input Video
+    // 1. Offscreen Input Video element
     this.inputVideo = document.createElement('video');
     this.inputVideo.autoplay = true;
     this.inputVideo.playsInline = true;
     this.inputVideo.muted = true;
-    this.inputVideo.style.display = 'none';
+    this.inputVideo.style.position = 'fixed';
+    this.inputVideo.style.top = '-9999px';
+    this.inputVideo.style.left = '-9999px';
+    this.inputVideo.style.opacity = '0';
+    this.inputVideo.style.pointerEvents = 'none';
+    this.inputVideo.width = 640;
+    this.inputVideo.height = 360;
     document.body.appendChild(this.inputVideo);
 
-    // 2. Offscreen Output Canvas (640x360 or 1280x720 HD)
+    // 2. Offscreen Output Canvas (640x360 for high 30 FPS throughput)
     this.outputCanvas = document.createElement('canvas');
     this.outputCanvas.width = 640;
     this.outputCanvas.height = 360;
@@ -87,25 +94,64 @@ export class VideoBackgroundProcessor {
     this.maskCtx = this.maskCanvas.getContext('2d', { willReadFrequently: false });
   }
 
+  private async loadScript(src: string): Promise<void> {
+    if (typeof document === 'undefined') return;
+    return new Promise((resolve, reject) => {
+      if (document.querySelector(`script[src="${src}"]`)) {
+        resolve();
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = src;
+      script.crossOrigin = 'anonymous';
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+      document.head.appendChild(script);
+    });
+  }
+
   public async initModel(): Promise<void> {
     if (this.selfieSegmentation || typeof window === 'undefined') return;
 
     try {
-      const { SelfieSegmentation } = await import('@mediapipe/selfie_segmentation');
-      this.selfieSegmentation = new SelfieSegmentation({
+      let SelfieSegmentationConstructor: any = null;
+
+      // 1. Try ESM / CJS module import
+      try {
+        const mpModule: any = await import('@mediapipe/selfie_segmentation');
+        SelfieSegmentationConstructor =
+          mpModule.SelfieSegmentation ||
+          mpModule.default?.SelfieSegmentation ||
+          (window as any).SelfieSegmentation;
+      } catch (importErr) {
+        console.warn('[VideoBackgroundProcessor] Module import failed, trying CDN script fallback:', importErr);
+      }
+
+      // 2. Try global window from CDN script if module import didn't expose constructor
+      if (!SelfieSegmentationConstructor) {
+        await this.loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js');
+        SelfieSegmentationConstructor = (window as any).SelfieSegmentation;
+      }
+
+      if (!SelfieSegmentationConstructor) {
+        throw new Error('SelfieSegmentation constructor could not be resolved from package or CDN.');
+      }
+
+      this.selfieSegmentation = new SelfieSegmentationConstructor({
         locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
       });
 
       this.selfieSegmentation.setOptions({
-        modelSelection: 1, // 1 = Landscape mode (optimal for desktop webcam)
+        modelSelection: 1, // 1 = Landscape mode (desktop webcam)
         selfieMode: false,
       });
 
       this.selfieSegmentation.onResults(this.handleSegmentationResults.bind(this));
       await this.selfieSegmentation.initialize();
       this.isModelReady = true;
+      console.log('[VideoBackgroundProcessor] MediaPipe SelfieSegmentation initialized successfully');
     } catch (err) {
-      console.warn('[VideoBackgroundProcessor] MediaPipe load fallback:', err);
+      console.warn('[VideoBackgroundProcessor] Model initialization error:', err);
       this.isModelReady = false;
     }
   }
@@ -115,6 +161,7 @@ export class VideoBackgroundProcessor {
     if (virtualImageSrc) {
       this.setVirtualImage(virtualImageSrc);
     }
+    console.log(`[VideoBackgroundProcessor] Mode updated to: "${mode}"`);
   }
 
   public setVirtualImage(src: string): void {
@@ -124,6 +171,10 @@ export class VideoBackgroundProcessor {
       img.crossOrigin = 'anonymous';
       img.onload = () => {
         this.virtualImage = img;
+        console.log('[VideoBackgroundProcessor] Virtual background image loaded');
+      };
+      img.onerror = (e) => {
+        console.warn('[VideoBackgroundProcessor] Virtual image failed to load:', e);
       };
       img.src = src;
     }
@@ -146,7 +197,7 @@ export class VideoBackgroundProcessor {
       await this.inputVideo.play().catch(console.warn);
     }
 
-    // Lazy load model if not yet loaded
+    // Lazy load model if not yet initialized
     if (!this.isModelReady) {
       await this.initModel().catch(console.warn);
     }
@@ -169,16 +220,26 @@ export class VideoBackgroundProcessor {
   private startProcessingLoop() {
     if (this.isDestroyed) return;
 
+    if (this.animationFrameId !== null) {
+      cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    }
+
     const processFrame = async () => {
       if (this.isDestroyed) return;
 
       if (this.inputVideo && this.inputVideo.readyState >= 2 && !this.inputVideo.paused) {
         if (this.selfieSegmentation && this.isModelReady && this.mode !== 'original') {
-          try {
-            await this.selfieSegmentation.send({ image: this.inputVideo });
-          } catch (e) {
-            // Fallback direct draw on frame error
-            this.drawDirectFrame();
+          if (!this.isProcessingFrame) {
+            this.isProcessingFrame = true;
+            try {
+              await this.selfieSegmentation.send({ image: this.inputVideo });
+            } catch (e) {
+              // On frame error, render raw frame to prevent black video
+              this.drawDirectFrame();
+            } finally {
+              this.isProcessingFrame = false;
+            }
           }
         } else {
           this.drawDirectFrame();
@@ -230,7 +291,7 @@ export class VideoBackgroundProcessor {
     this.maskCtx.clearRect(0, 0, width, height);
     // Draw segmentation mask (white person, black background)
     this.maskCtx.drawImage(results.segmentationMask, 0, 0, width, height);
-    // Clip with input camera image so mask canvas has ONLY the person
+    // Clip with input camera image so mask canvas has ONLY the sharp person
     this.maskCtx.globalCompositeOperation = 'source-in';
     this.maskCtx.drawImage(results.image, 0, 0, width, height);
     this.maskCtx.restore();
@@ -244,18 +305,18 @@ export class VideoBackgroundProcessor {
       this.outputCtx.drawImage(results.image, 0, 0, width, height);
       this.outputCtx.filter = 'none';
     } else if (this.mode === 'remove') {
-      // Background Layer: Studio neutral dark gradient
+      // Background Layer: Studio neutral dark gradient (Show Only Me)
       const grad = this.outputCtx.createLinearGradient(0, 0, width, height);
-      grad.addColorStop(0, '#0f172a');
+      grad.addColorStop(0, '#090d16');
       grad.addColorStop(0.5, '#1e1b4b');
-      grad.addColorStop(1, '#0f172a');
+      grad.addColorStop(1, '#090d16');
       this.outputCtx.fillStyle = grad;
       this.outputCtx.fillRect(0, 0, width, height);
 
       // Subtle ambient studio backlight
       const radial = this.outputCtx.createRadialGradient(width / 2, height / 2, 20, width / 2, height / 2, width / 1.5);
-      radial.addColorStop(0, 'rgba(99, 102, 241, 0.15)');
-      radial.addColorStop(1, 'rgba(15, 23, 42, 0)');
+      radial.addColorStop(0, 'rgba(99, 102, 241, 0.25)');
+      radial.addColorStop(1, 'rgba(9, 13, 22, 0)');
       this.outputCtx.fillStyle = radial;
       this.outputCtx.fillRect(0, 0, width, height);
     } else if (this.mode === 'virtual') {

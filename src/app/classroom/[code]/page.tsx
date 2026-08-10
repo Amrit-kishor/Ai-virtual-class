@@ -632,7 +632,10 @@ export default function ClassroomPage() {
     if (virtualImageSrc) setVirtualImage(virtualImageSrc);
 
     const rawCamera = rawCameraStreamRef.current;
-    if (!rawCamera) return;
+    if (!rawCamera) {
+      console.warn('[Background Effects] No raw camera stream available.');
+      return;
+    }
 
     if (!backgroundProcessorRef.current) {
       backgroundProcessorRef.current = new VideoBackgroundProcessor();
@@ -645,10 +648,13 @@ export default function ClassroomPage() {
       const originalVideoTrack = rawCamera.getVideoTracks()[0];
       if (originalVideoTrack) {
         originalVideoTrack.enabled = !isVideoOff;
-        peerConnectionsRef.current.forEach((pc) => {
+        console.log(`[Background Effects] Restoring original track ID: ${originalVideoTrack.id} to ${peerConnectionsRef.current.size} peer connections`);
+        peerConnectionsRef.current.forEach((pc, peerSocketId) => {
           const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
           if (sender) {
-            sender.replaceTrack(originalVideoTrack).catch(console.warn);
+            sender.replaceTrack(originalVideoTrack).then(() => {
+              console.log(`[Background Effects] Successfully restored original track on peer ${peerSocketId}`);
+            }).catch(console.warn);
           }
         });
 
@@ -668,10 +674,14 @@ export default function ClassroomPage() {
 
         if (processedVideoTrack) {
           processedVideoTrack.enabled = !isVideoOff;
-          peerConnectionsRef.current.forEach((pc) => {
+          console.log(`[Background Effects] Swapping to processed track ID: ${processedVideoTrack.id} (kind: ${processedVideoTrack.kind}, readyState: ${processedVideoTrack.readyState}) across ${peerConnectionsRef.current.size} peer connections`);
+
+          peerConnectionsRef.current.forEach((pc, peerSocketId) => {
             const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
             if (sender) {
-              sender.replaceTrack(processedVideoTrack).catch(console.warn);
+              sender.replaceTrack(processedVideoTrack).then(() => {
+                console.log(`[Background Effects] Successfully replaced track on peer ${peerSocketId} with processed track ${processedVideoTrack.id}`);
+              }).catch(console.warn);
             }
           });
 
