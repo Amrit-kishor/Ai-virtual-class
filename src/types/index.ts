@@ -33,6 +33,19 @@ export interface Participant {
   joinedAt: number;
 }
 
+// Hand Raise & Questioning State Machine
+export type HandState = 'LOWERED' | 'RAISED' | 'ALLOWED' | 'DISMISSED' | 'QUESTIONING' | 'COMPLETED';
+
+export interface RaisedHandRequest {
+  id: string;
+  socketId: string;
+  userId: string;
+  userName: string;
+  userRole: UserRole;
+  state: HandState;
+  raisedAt: number;
+}
+
 // WebRTC Signaling Types
 export interface SignalPayload {
   to: string;

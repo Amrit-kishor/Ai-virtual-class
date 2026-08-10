@@ -11,12 +11,16 @@ import { errorHandler, AppError } from './errorHandler';
 import { roomStore } from './roomStore';
 import { prisma } from '../src/lib/prisma';
 import { TokenPayload } from '../src/lib/auth';
-import { Participant, ChatMessage, WhiteboardElement, LectureTopic } from '../src/types';
+import { Participant, ChatMessage, WhiteboardElement, LectureTopic, RaisedHandRequest } from '../src/types';
 import {
   JoinRoomPayloadSchema,
   ChatMessagePayloadSchema,
   ToggleMediaPayloadSchema,
   RaiseHandPayloadSchema,
+  LowerHandPayloadSchema,
+  AllowStudentQuestionSchema,
+  DismissStudentHandSchema,
+  CompleteStudentQuestionSchema,
   WhiteboardUpdatePayloadSchema,
   NotesUpdatePayloadSchema,
   KickParticipantPayloadSchema,
@@ -178,11 +182,12 @@ app.prepare().then(() => {
 
       room.participants.set(socket.id, participant);
 
-      // Send initial state upon join
+      // Send initial state upon join (including active raised hands queue)
       socket.emit('room-joined', {
         roomCode,
         teacherId: room.teacherId,
         participants: Array.from(room.participants.values()),
+        raisedHands: roomStore.getRaisedHands(roomCode),
         whiteboardElements: room.whiteboardElements,
         chatMessages: room.chatMessages,
         notesText: room.notesText,
@@ -228,21 +233,145 @@ app.prepare().then(() => {
       }
     });
 
-    // Raise Hand
+    // Raise Hand (Student)
     socket.on('raise-hand', (rawPayload: unknown) => {
       if (socketRateLimiter.isRateLimited(socket.id, 'raise-hand', 5)) return;
       const parseResult = RaiseHandPayloadSchema.safeParse(rawPayload);
       if (!parseResult.success) return;
 
-      const { roomCode, isHandRaised } = parseResult.data;
+      const { roomCode } = parseResult.data;
       const room = roomStore.getRoom(roomCode);
       if (!room) return;
 
       const participant = room.participants.get(socket.id);
-      if (participant) {
-        participant.isHandRaised = isHandRaised;
+      if (!participant) return;
+
+      const request = roomStore.raiseHand(roomCode, socket.id, {
+        userId: participant.userId,
+        name: participant.name,
+        role: participant.role,
+      });
+
+      if (request) {
+        logger.info({ roomCode, userId: participant.userId, name: participant.name }, 'Hand raised by student');
         io.to(roomCode).emit('participant-updated', { participant });
+        io.to(roomCode).emit('hand-raised-queue-updated', {
+          raisedHands: roomStore.getRaisedHands(roomCode),
+          latestRequest: request,
+        });
+        socket.emit('hand-state-changed', { state: 'RAISED', request });
       }
+    });
+
+    // Lower Hand (Student initiated)
+    socket.on('lower-hand', (rawPayload: unknown) => {
+      const parseResult = LowerHandPayloadSchema.safeParse(rawPayload);
+      if (!parseResult.success) return;
+
+      const { roomCode } = parseResult.data;
+      const room = roomStore.getRoom(roomCode);
+      if (!room) return;
+
+      const participant = room.participants.get(socket.id);
+      if (!participant) return;
+
+      roomStore.lowerHand(roomCode, participant.userId);
+      logger.info({ roomCode, userId: participant.userId }, 'Hand lowered by student');
+
+      io.to(roomCode).emit('participant-updated', { participant });
+      io.to(roomCode).emit('hand-raised-queue-updated', {
+        raisedHands: roomStore.getRaisedHands(roomCode),
+      });
+      socket.emit('hand-state-changed', { state: 'LOWERED' });
+    });
+
+    // Allow Student Question (Teacher only)
+    socket.on('allow-student-question', (rawPayload: unknown) => {
+      const parseResult = AllowStudentQuestionSchema.safeParse(rawPayload);
+      if (!parseResult.success) return;
+
+      const { roomCode, targetUserId } = parseResult.data;
+      const room = roomStore.getRoom(roomCode);
+      if (!room) return;
+
+      const caller = room.participants.get(socket.id);
+      if (!caller || caller.role !== 'TEACHER') {
+        socket.emit('error-message', { message: 'Unauthorized: Only teachers can allow questions.' });
+        return;
+      }
+
+      const result = roomStore.allowStudentToSpeak(roomCode, targetUserId);
+      if (result) {
+        logger.info({ roomCode, teacherId: caller.userId, targetUserId }, 'Teacher allowed student to speak');
+
+        if (result.studentSocketId) {
+          io.to(result.studentSocketId).emit('question-allowed', {
+            message: 'You may ask your question now.',
+            allowedBy: caller.name,
+          });
+          io.to(result.studentSocketId).emit('hand-state-changed', { state: 'ALLOWED', request: result.request });
+        }
+
+        io.to(roomCode).emit('hand-raised-queue-updated', {
+          raisedHands: roomStore.getRaisedHands(roomCode),
+        });
+      }
+    });
+
+    // Dismiss Student Hand (Teacher only)
+    socket.on('dismiss-student-hand', (rawPayload: unknown) => {
+      const parseResult = DismissStudentHandSchema.safeParse(rawPayload);
+      if (!parseResult.success) return;
+
+      const { roomCode, targetUserId } = parseResult.data;
+      const room = roomStore.getRoom(roomCode);
+      if (!room) return;
+
+      const caller = room.participants.get(socket.id);
+      if (!caller || caller.role !== 'TEACHER') {
+        socket.emit('error-message', { message: 'Unauthorized: Only teachers can dismiss hands.' });
+        return;
+      }
+
+      const result = roomStore.dismissStudentHand(roomCode, targetUserId);
+      if (result) {
+        logger.info({ roomCode, teacherId: caller.userId, targetUserId }, 'Teacher dismissed student hand');
+
+        if (result.studentSocketId) {
+          io.to(result.studentSocketId).emit('hand-dismissed', {
+            message: 'Your hand request was dismissed.',
+          });
+          io.to(result.studentSocketId).emit('hand-state-changed', { state: 'DISMISSED' });
+        }
+
+        io.to(roomCode).emit('hand-raised-queue-updated', {
+          raisedHands: roomStore.getRaisedHands(roomCode),
+        });
+      }
+    });
+
+    // Complete Student Question (Teacher or Student)
+    socket.on('complete-student-question', (rawPayload: unknown) => {
+      const parseResult = CompleteStudentQuestionSchema.safeParse(rawPayload);
+      if (!parseResult.success) return;
+
+      const { roomCode, targetUserId } = parseResult.data;
+      const room = roomStore.getRoom(roomCode);
+      if (!room) return;
+
+      roomStore.completeStudentQuestion(roomCode, targetUserId);
+      logger.info({ roomCode, targetUserId }, 'Student question completed');
+
+      for (const [sId, p] of room.participants.entries()) {
+        if (p.userId === targetUserId) {
+          io.to(sId).emit('hand-state-changed', { state: 'LOWERED' });
+          break;
+        }
+      }
+
+      io.to(roomCode).emit('hand-raised-queue-updated', {
+        raisedHands: roomStore.getRaisedHands(roomCode),
+      });
     });
 
     // Chat Message

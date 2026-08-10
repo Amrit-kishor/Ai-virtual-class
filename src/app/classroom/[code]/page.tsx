@@ -13,6 +13,8 @@ import {
   DoubtMessage,
   QuizData,
   SummaryData,
+  HandState,
+  RaisedHandRequest,
 } from '@/types';
 
 import { LeftClassroomSidebar } from '@/components/classroom/LeftClassroomSidebar';
@@ -24,6 +26,7 @@ import { PrivateAIDoubt } from '@/components/classroom/PrivateAIDoubt';
 import { CodingPlayground } from '@/components/classroom/CodingPlayground';
 import { NotesPanel } from '@/components/classroom/NotesPanel';
 import { AIQuizCenterModal } from '@/components/quiz/AIQuizCenterModal';
+import { TeacherRaisedHandsPanel } from '@/components/classroom/TeacherRaisedHandsPanel';
 import { AttendanceModal } from '@/components/classroom/AttendanceModal';
 import { AISummaryModal } from '@/components/classroom/AISummaryModal';
 import { InviteMembersModal } from '@/components/classroom/InviteMembersModal';
@@ -91,6 +94,9 @@ export default function ClassroomPage() {
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [isHandRaised, setIsHandRaised] = useState(false);
+  const [handState, setHandState] = useState<HandState>('LOWERED');
+  const [raisedHandsQueue, setRaisedHandsQueue] = useState<RaisedHandRequest[]>([]);
+  const [handToastMessage, setHandToastMessage] = useState<string | null>(null);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
 
   // Media Stream & Permission States
@@ -362,6 +368,15 @@ export default function ClassroomPage() {
         setCurrentTopicIndex(data.currentTopicIndex || 0);
       }
       setIsPublicAI(!!data.isPublicAI);
+
+      if (data.raisedHands && Array.isArray(data.raisedHands)) {
+        setRaisedHandsQueue(data.raisedHands);
+        const myReq = data.raisedHands.find((r: RaisedHandRequest) => r.userId === currentUserSession.id);
+        if (myReq) {
+          setHandState(myReq.state);
+          setIsHandRaised(true);
+        }
+      }
     });
 
     socket.on('user-joined', (data: any) => {
@@ -542,6 +557,44 @@ export default function ClassroomPage() {
       router.push('/dashboard');
     });
 
+    // Real-Time Hand Raise Queue & State Handlers
+    socket.on('hand-raised-queue-updated', ({ raisedHands, latestRequest }: { raisedHands: RaisedHandRequest[]; latestRequest?: RaisedHandRequest }) => {
+      setRaisedHandsQueue(raisedHands || []);
+
+      if (user.role === 'TEACHER' && latestRequest && latestRequest.userId !== user.id) {
+        setHandToastMessage(`✋ ${latestRequest.userName} raised their hand`);
+        setTimeout(() => setHandToastMessage(null), 4000);
+      }
+
+      const myReq = raisedHands?.find((r: RaisedHandRequest) => r.userId === user.id);
+      if (myReq) {
+        setHandState(myReq.state);
+        setIsHandRaised(myReq.state === 'RAISED' || myReq.state === 'ALLOWED' || myReq.state === 'QUESTIONING');
+      } else {
+        setHandState('LOWERED');
+        setIsHandRaised(false);
+      }
+    });
+
+    socket.on('hand-state-changed', ({ state }: { state: HandState }) => {
+      setHandState(state);
+      setIsHandRaised(state === 'RAISED' || state === 'ALLOWED' || state === 'QUESTIONING');
+    });
+
+    socket.on('question-allowed', ({ message, allowedBy }: { message: string; allowedBy: string }) => {
+      setHandToastMessage(`🎤 ${allowedBy || 'Teacher'} allowed you to speak! You may ask your question.`);
+      setHandState('ALLOWED');
+      setIsHandRaised(true);
+      setTimeout(() => setHandToastMessage(null), 6000);
+    });
+
+    socket.on('hand-dismissed', ({ message }: { message: string }) => {
+      setHandToastMessage(message || 'Your hand request was dismissed.');
+      setHandState('LOWERED');
+      setIsHandRaised(false);
+      setTimeout(() => setHandToastMessage(null), 4000);
+    });
+
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
@@ -550,6 +603,10 @@ export default function ClassroomPage() {
       socket.off('user-joined');
       socket.off('user-left');
       socket.off('participant-updated');
+      socket.off('hand-raised-queue-updated');
+      socket.off('hand-state-changed');
+      socket.off('question-allowed');
+      socket.off('hand-dismissed');
       socket.off('webrtc-offer');
       socket.off('webrtc-answer');
       socket.off('webrtc-ice-candidate');
@@ -772,9 +829,30 @@ export default function ClassroomPage() {
 
   const handleToggleHand = () => {
     const socket = getSocket();
-    const next = !isHandRaised;
-    setIsHandRaised(next);
-    socket.emit('raise-hand', { roomCode, isHandRaised: next });
+    if (handState === 'LOWERED' || handState === 'DISMISSED' || handState === 'COMPLETED') {
+      setHandState('RAISED');
+      setIsHandRaised(true);
+      socket.emit('raise-hand', { roomCode });
+    } else {
+      setHandState('LOWERED');
+      setIsHandRaised(false);
+      socket.emit('lower-hand', { roomCode });
+    }
+  };
+
+  const handleAllowStudent = (targetUserId: string) => {
+    const socket = getSocket();
+    socket.emit('allow-student-question', { roomCode, targetUserId });
+  };
+
+  const handleDismissStudent = (targetUserId: string) => {
+    const socket = getSocket();
+    socket.emit('dismiss-student-hand', { roomCode, targetUserId });
+  };
+
+  const handleCompleteQuestion = (targetUserId: string) => {
+    const socket = getSocket();
+    socket.emit('complete-student-question', { roomCode, targetUserId });
   };
 
   const handleSpotlight = (targetSocketId: string) => {
@@ -1359,18 +1437,22 @@ export default function ClassroomPage() {
             <span className="hidden sm:inline">{isScreenSharing ? 'Sharing' : 'Share'}</span>
           </button>
 
-          {/* Ask Question / Raise Hand Secondary Control */}
+          {/* Ask Question / Raise Hand Control */}
           <button
             onClick={handleToggleHand}
             className={`p-2.5 rounded-2xl border font-bold text-xs flex items-center gap-1.5 transition ${
-              isHandRaised
-                ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/30'
+              handState === 'ALLOWED'
+                ? 'bg-emerald-600 text-white border-emerald-400 shadow-lg shadow-emerald-600/30 animate-pulse'
+                : handState === 'RAISED'
+                ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/30 ring-2 ring-amber-300'
                 : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-white/10'
             }`}
-            title="Raise Hand / Ask Question"
+            title={handState === 'RAISED' ? 'Click to Lower Hand' : 'Raise Hand / Ask Question'}
           >
-            <Hand size={16} />
-            <span className="hidden sm:inline">Ask Question</span>
+            <Hand size={16} className={handState === 'RAISED' ? 'animate-bounce' : ''} />
+            <span className="hidden sm:inline">
+              {handState === 'ALLOWED' ? '🎤 Speaking Allowed' : handState === 'RAISED' ? '✋ Hand Raised' : 'Ask Question'}
+            </span>
           </button>
         </div>
 
@@ -1423,6 +1505,52 @@ export default function ClassroomPage() {
         onSelectMode={handleSelectBackgroundMode}
         isLoading={isBackgroundLoading}
       />
+
+      {/* Toast Notification for Hand-Raise events */}
+      {handToastMessage && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 text-white border border-amber-500/40 px-5 py-3 rounded-2xl shadow-2xl backdrop-blur-md flex items-center gap-3 animate-in fade-in slide-in-from-top-3">
+          <Hand size={18} className="text-amber-400 animate-bounce" />
+          <span className="text-xs font-bold">{handToastMessage}</span>
+          <button
+            onClick={() => setHandToastMessage(null)}
+            className="text-slate-400 hover:text-white text-xs ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Student Question Permission Banner */}
+      {user.role === 'STUDENT' && handState === 'ALLOWED' && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 bg-emerald-600 text-white px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-bottom-3 border border-emerald-400">
+          <Mic size={18} className="animate-pulse text-white" />
+          <span className="text-xs font-bold">You may ask your question now!</span>
+          {isMuted && (
+            <button
+              onClick={() => handleToggleMedia('audio')}
+              className="px-3 py-1 bg-white text-emerald-950 font-black text-xs rounded-xl hover:bg-slate-100 transition shadow"
+            >
+              Unmute Mic
+            </button>
+          )}
+          <button
+            onClick={handleToggleHand}
+            className="px-2.5 py-1 bg-emerald-800/90 hover:bg-emerald-900 text-white text-[11px] font-bold rounded-xl transition"
+          >
+            Lower Hand
+          </button>
+        </div>
+      )}
+
+      {/* Teacher Raised Hands Floating Queue Panel */}
+      {user.role === 'TEACHER' && (
+        <TeacherRaisedHandsPanel
+          raisedHands={raisedHandsQueue}
+          onAllowStudent={handleAllowStudent}
+          onDismissStudent={handleDismissStudent}
+          onCompleteQuestion={handleCompleteQuestion}
+        />
+      )}
     </div>
   );
 }

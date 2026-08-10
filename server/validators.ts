@@ -45,7 +45,26 @@ export const ToggleMediaPayloadSchema = z.object({
 
 export const RaiseHandPayloadSchema = z.object({
   roomCode: z.string().min(1),
-  isHandRaised: z.boolean(),
+  isHandRaised: z.boolean().optional(),
+});
+
+export const LowerHandPayloadSchema = z.object({
+  roomCode: z.string().min(1),
+});
+
+export const AllowStudentQuestionSchema = z.object({
+  roomCode: z.string().min(1),
+  targetUserId: z.string().min(1),
+});
+
+export const DismissStudentHandSchema = z.object({
+  roomCode: z.string().min(1),
+  targetUserId: z.string().min(1),
+});
+
+export const CompleteStudentQuestionSchema = z.object({
+  roomCode: z.string().min(1),
+  targetUserId: z.string().min(1),
 });
 
 export const WhiteboardUpdatePayloadSchema = z.object({

@@ -1,4 +1,4 @@
-import { Participant, ChatMessage, WhiteboardElement, LectureTopic } from '../src/types';
+import { Participant, ChatMessage, WhiteboardElement, LectureTopic, RaisedHandRequest } from '../src/types';
 import { prisma } from '../src/lib/prisma';
 import { logger } from './logger';
 
@@ -8,6 +8,7 @@ export interface RoomState {
   maxParticipants: number;
   isEnded: boolean;
   participants: Map<string, Participant>; // key: socketId
+  raisedHands: Map<string, RaisedHandRequest>; // key: userId
   whiteboardElements: WhiteboardElement[];
   chatMessages: ChatMessage[];
   notesText: string;
@@ -98,6 +99,7 @@ class RoomStoreManager {
         maxParticipants,
         isEnded,
         participants: new Map(),
+        raisedHands: new Map(),
         whiteboardElements,
         chatMessages: [],
         notesText,
@@ -118,6 +120,111 @@ class RoomStoreManager {
 
   public getRoom(code: string): RoomState | undefined {
     return this.rooms.get(code);
+  }
+
+  public raiseHand(roomCode: string, socketId: string, user: { userId: string; name: string; role: 'TEACHER' | 'STUDENT' }): RaisedHandRequest | null {
+    const room = this.rooms.get(roomCode);
+    if (!room || user.role === 'TEACHER') return null;
+
+    const existing = room.raisedHands.get(user.userId);
+    if (existing) {
+      existing.socketId = socketId;
+      existing.userName = user.name;
+      existing.state = 'RAISED';
+      return existing;
+    }
+
+    const request: RaisedHandRequest = {
+      id: `hand_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      socketId,
+      userId: user.userId,
+      userName: user.name,
+      userRole: user.role,
+      state: 'RAISED',
+      raisedAt: Date.now(),
+    };
+
+    room.raisedHands.set(user.userId, request);
+
+    const participant = room.participants.get(socketId);
+    if (participant) {
+      participant.isHandRaised = true;
+    }
+
+    return request;
+  }
+
+  public lowerHand(roomCode: string, userId: string): boolean {
+    const room = this.rooms.get(roomCode);
+    if (!room) return false;
+
+    const existed = room.raisedHands.delete(userId);
+
+    for (const p of room.participants.values()) {
+      if (p.userId === userId) {
+        p.isHandRaised = false;
+      }
+    }
+
+    return existed;
+  }
+
+  public allowStudentToSpeak(roomCode: string, targetUserId: string): { request: RaisedHandRequest; studentSocketId: string } | null {
+    const room = this.rooms.get(roomCode);
+    if (!room) return null;
+
+    const req = room.raisedHands.get(targetUserId);
+    if (!req) return null;
+
+    req.state = 'ALLOWED';
+
+    let activeSocketId = req.socketId;
+    for (const [sId, p] of room.participants.entries()) {
+      if (p.userId === targetUserId) {
+        activeSocketId = sId;
+        break;
+      }
+    }
+
+    return { request: req, studentSocketId: activeSocketId };
+  }
+
+  public dismissStudentHand(roomCode: string, targetUserId: string): { studentSocketId: string } | null {
+    const room = this.rooms.get(roomCode);
+    if (!room) return null;
+
+    const req = room.raisedHands.get(targetUserId);
+    let activeSocketId = req?.socketId || '';
+
+    for (const [sId, p] of room.participants.entries()) {
+      if (p.userId === targetUserId) {
+        activeSocketId = sId;
+        p.isHandRaised = false;
+        break;
+      }
+    }
+
+    room.raisedHands.delete(targetUserId);
+    return { studentSocketId: activeSocketId };
+  }
+
+  public completeStudentQuestion(roomCode: string, targetUserId: string): boolean {
+    const room = this.rooms.get(roomCode);
+    if (!room) return false;
+
+    const existed = room.raisedHands.delete(targetUserId);
+    for (const p of room.participants.values()) {
+      if (p.userId === targetUserId) {
+        p.isHandRaised = false;
+      }
+    }
+    return existed;
+  }
+
+  public getRaisedHands(roomCode: string): RaisedHandRequest[] {
+    const room = this.rooms.get(roomCode);
+    if (!room) return [];
+    return Array.from(room.raisedHands.values()).sort((a, b) => a.raisedAt - b.raisedAt);
   }
 
   public async persistRoomState(code: string): Promise<void> {
