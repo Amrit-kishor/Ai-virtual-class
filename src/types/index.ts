@@ -114,6 +114,9 @@ export interface QuizQuestion {
 export interface QuizData {
   id: string;
   title: string;
+  topic?: string;
+  quizType?: 'ai' | 'custom';
+  questionCount?: number;
   questions: QuizQuestion[];
 }
 
@@ -122,6 +125,49 @@ export interface SummaryData {
   keyPoints: string[];
   formulas: string[];
   quiz: QuizQuestion[];
+}
+
+export interface DetailedQuestionReview {
+  id: string;
+  type: 'mcq' | 'coding' | 'true_false' | 'fill_blank';
+  question: string;
+  options?: string[];
+  userAnswer?: string;
+  correctAnswer: string;
+  isCorrect: boolean;
+  isUnanswered: boolean;
+  explanation: string;
+}
+
+export interface QuizEvaluationResult {
+  submissionId: string;
+  quizId: string;
+  title: string;
+  topic?: string;
+  score: number;
+  totalQuestions: number;
+  percentage: number;
+  correctCount: number;
+  incorrectCount: number;
+  unansweredCount: number;
+  timeTakenSeconds?: number;
+  aiFeedback?: string;
+  review: DetailedQuestionReview[];
+  submittedAt: string;
+}
+
+export interface QuizHistoryItem {
+  id: string;
+  quizId: string;
+  title: string;
+  topic?: string;
+  quizType: string;
+  score: number;
+  totalQuestions: number;
+  percentage: number;
+  timeTaken?: number;
+  aiFeedback?: string;
+  submittedAt: string;
 }
 
 export interface QuizSubmissionResult {

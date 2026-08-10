@@ -23,8 +23,7 @@ import { ChatPanel } from '@/components/classroom/ChatPanel';
 import { PrivateAIDoubt } from '@/components/classroom/PrivateAIDoubt';
 import { CodingPlayground } from '@/components/classroom/CodingPlayground';
 import { NotesPanel } from '@/components/classroom/NotesPanel';
-import { QuizModal } from '@/components/classroom/QuizModal';
-import { CreateQuizModal } from '@/components/classroom/CreateQuizModal';
+import { AIQuizCenterModal } from '@/components/quiz/AIQuizCenterModal';
 import { AttendanceModal } from '@/components/classroom/AttendanceModal';
 import { AISummaryModal } from '@/components/classroom/AISummaryModal';
 import { InviteMembersModal } from '@/components/classroom/InviteMembersModal';
@@ -129,10 +128,10 @@ export default function ClassroomPage() {
 
   // Modals
   const [activeQuiz, setActiveQuiz] = useState<QuizData | null>(null);
+  const [showQuizCenterModal, setShowQuizCenterModal] = useState(false);
   const [showAttendance, setShowAttendance] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
-  const [showCreateQuizModal, setShowCreateQuizModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [summaryData, setSummaryData] = useState<SummaryData | null>(null);
 
@@ -926,26 +925,8 @@ export default function ClassroomPage() {
     }
   };
 
-  const handleTriggerQuiz = async () => {
-    try {
-      const result = await safeFetchJson<SummaryData>('/api/ai/summary', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          lectureHistory: topics.map((t) => t.content).join(' '),
-        }),
-      });
-      const quiz: QuizData = {
-        id: 'q_' + Date.now(),
-        title: 'Interactive Classroom Knowledge Quiz',
-        questions: result.data?.quiz || [],
-      };
-      setActiveQuiz(quiz);
-      const socket = getSocket();
-      socket.emit('broadcast-quiz', { roomCode, quiz });
-    } catch (err) {
-      console.error(err);
-    }
+  const handleTriggerQuiz = () => {
+    setShowQuizCenterModal(true);
   };
 
   const handleTriggerSummary = async () => {
@@ -1079,20 +1060,12 @@ export default function ClassroomPage() {
             <Users size={13} /> Attendance
           </button>
 
-          {user.role === 'TEACHER' && (
-            <button
-              onClick={() => setShowCreateQuizModal(true)}
-              className="text-xs bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 text-slate-950 font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 shadow-lg shadow-amber-500/20 transition"
-            >
-              <Trophy size={13} /> Create Quiz
-            </button>
-          )}
-
           <button
             onClick={handleTriggerQuiz}
-            className="text-xs bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 font-bold px-2.5 py-1.5 rounded-lg border border-amber-500/30 flex items-center gap-1 transition"
+            className="text-xs bg-gradient-to-r from-amber-500/20 to-orange-500/20 hover:from-amber-500/30 hover:to-orange-500/30 text-amber-300 font-bold px-3 py-1.5 rounded-lg border border-amber-500/40 flex items-center gap-1.5 shadow-sm transition"
           >
-            <Trophy size={13} /> AI Quiz
+            <Trophy size={13} className="text-amber-400" />
+            <span>AI Quiz</span>
           </button>
 
           <button
@@ -1426,8 +1399,18 @@ export default function ClassroomPage() {
           onUploadSuccess={handleUploadSuccess}
         />
       )}
-      {showCreateQuizModal && <CreateQuizModal onBroadcastQuiz={handleBroadcastQuiz} onClose={() => setShowCreateQuizModal(false)} />}
-      {activeQuiz && <QuizModal quiz={activeQuiz} onClose={() => setActiveQuiz(null)} />}
+      {/* Unified Revamped AI & Custom Quiz Center Modal */}
+      <AIQuizCenterModal
+        isOpen={showQuizCenterModal || !!activeQuiz}
+        onClose={() => {
+          setShowQuizCenterModal(false);
+          setActiveQuiz(null);
+        }}
+        initialTopic={topics[currentTopicIndex]?.title || 'Classroom Assessment'}
+        initialQuiz={activeQuiz}
+        onBroadcastQuiz={handleBroadcastQuiz}
+        isTeacher={user.role === 'TEACHER'}
+      />
       {showAttendance && <AttendanceModal participants={participants} onClose={() => setShowAttendance(false)} />}
       {showSummary && summaryData && <AISummaryModal summaryData={summaryData} onClose={() => setShowSummary(false)} />}
       

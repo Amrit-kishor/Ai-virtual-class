@@ -5,6 +5,7 @@ import { UserProfile, ClassroomInfo } from '@/types';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { safeFetchJson } from '@/lib/utils';
+import { AIQuizCenterModal } from '@/components/quiz/AIQuizCenterModal';
 import {
   Sparkles,
   Plus,
@@ -26,6 +27,7 @@ export default function DashboardPage() {
   const [user, setUser] = useState<any>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
+  const [showQuizModal, setShowQuizModal] = useState(false);
 
   // Form states
   const [roomTitle, setRoomTitle] = useState('');
@@ -144,6 +146,12 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-3 w-full md:w-auto">
+            <button
+              onClick={() => setShowQuizModal(true)}
+              className="flex-1 md:flex-none bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-bold px-5 py-3 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 transition"
+            >
+              <Trophy size={15} /> Take AI Quiz
+            </button>
             <button
               onClick={() => setShowJoinModal(true)}
               className="flex-1 md:flex-none bg-slate-900 hover:bg-slate-800 border border-white/10 text-white font-bold px-5 py-3 rounded-2xl text-xs flex items-center justify-center gap-2 transition"
@@ -342,6 +350,13 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
+      {/* Revamped AI Quiz Center Modal */}
+      <AIQuizCenterModal
+        isOpen={showQuizModal}
+        onClose={() => setShowQuizModal(false)}
+        initialTopic="Computer Science Fundamentals"
+      />
     </div>
   );
 }

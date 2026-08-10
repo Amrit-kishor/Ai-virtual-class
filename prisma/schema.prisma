@@ -124,24 +124,31 @@ model Attendance {
 
 model Quiz {
   id            String           @id @default(uuid())
-  classroomId   String
-  classroom     Classroom        @relation(fields: [classroomId], references: [id], onDelete: Cascade)
+  classroomId   String?
+  classroom     Classroom?       @relation(fields: [classroomId], references: [id], onDelete: Cascade)
   title         String
+  topic         String?
+  quizType      String           @default("ai")
+  questionCount Int              @default(5)
   questionsJson String
   createdAt     DateTime         @default(now())
   submissions   QuizSubmission[]
 }
 
 model QuizSubmission {
-  id          String   @id @default(uuid())
-  quizId      String
-  quiz        Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userName    String
-  score       Int
-  answersJson String
-  submittedAt DateTime @default(now())
+  id             String   @id @default(uuid())
+  quizId         String
+  quiz           Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userName       String
+  score          Int
+  totalQuestions Int      @default(5)
+  percentage     Float    @default(0)
+  timeTaken      Int?     @default(0)
+  aiFeedback     String?
+  answersJson    String
+  submittedAt    DateTime @default(now())
 }
 
 model Recording {
