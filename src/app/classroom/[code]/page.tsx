@@ -378,8 +378,13 @@ export default function ClassroomPage() {
       });
     });
 
-    socket.on('participant-updated', ({ participant }: { participant: Participant }) => {
-      setParticipants((prev) => prev.map((p) => (p.socketId === participant.socketId ? participant : p)));
+    socket.on('participant-updated', (data: any) => {
+      const participant: Participant = data.participant || data;
+      if (participant && participant.socketId) {
+        setParticipants((prev) =>
+          prev.map((p) => (p.socketId === participant.socketId ? { ...p, ...participant } : p))
+        );
+      }
     });
 
     // Handle Incoming WebRTC Offer
@@ -547,18 +552,19 @@ export default function ClassroomPage() {
   }, [roomCode, router]);
 
   // Handler Functions
-  const handleToggleMedia = (type: 'audio' | 'video') => {
+  const handleToggleMedia = async (type: 'audio' | 'video') => {
     const socket = getSocket();
 
     if (type === 'audio') {
       const nextMuted = !isMuted;
       setIsMuted(nextMuted);
 
-      if (localStream) {
-        localStream.getAudioTracks().forEach((t) => (t.enabled = !nextMuted));
+      const stream = localStreamRef.current || localStream;
+      if (stream) {
+        stream.getAudioTracks().forEach((t) => (t.enabled = !nextMuted));
       } else if (!nextMuted) {
-        requestMediaPermissions().then((stream) => {
-          if (stream) stream.getAudioTracks().forEach((t) => (t.enabled = true));
+        requestMediaPermissions().then((newStream) => {
+          if (newStream) newStream.getAudioTracks().forEach((t) => (t.enabled = true));
         });
       }
       socket.emit('toggle-media', { roomCode, type: 'audio', value: nextMuted });
@@ -566,13 +572,33 @@ export default function ClassroomPage() {
       const nextVideoOff = !isVideoOff;
       setIsVideoOff(nextVideoOff);
 
-      if (localStream) {
-        localStream.getVideoTracks().forEach((t) => (t.enabled = !nextVideoOff));
+      const stream = localStreamRef.current || localStream;
+      if (stream) {
+        const videoTracks = stream.getVideoTracks();
+        const activeLiveTrack = videoTracks.find((t) => t.readyState === 'live');
+
+        if (activeLiveTrack) {
+          activeLiveTrack.enabled = !nextVideoOff;
+        } else if (!nextVideoOff) {
+          // If track ended or not found, acquire fresh camera stream & replace track in active peer connections
+          const newStream = await requestMediaPermissions();
+          if (newStream) {
+            const newVideoTrack = newStream.getVideoTracks()[0];
+            if (newVideoTrack) {
+              newVideoTrack.enabled = true;
+              peerConnectionsRef.current.forEach((pc) => {
+                const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
+                if (sender) {
+                  sender.replaceTrack(newVideoTrack).catch(console.warn);
+                }
+              });
+            }
+          }
+        }
       } else if (!nextVideoOff) {
-        requestMediaPermissions().then((stream) => {
-          if (stream) stream.getVideoTracks().forEach((t) => (t.enabled = true));
-        });
+        requestMediaPermissions();
       }
+
       socket.emit('toggle-media', { roomCode, type: 'video', value: nextVideoOff });
     }
   };

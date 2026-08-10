@@ -19,13 +19,19 @@ export interface RoomState {
 
 class RoomStoreManager {
   private rooms: Map<string, RoomState> = new Map();
+  private roomPromises: Map<string, Promise<RoomState>> = new Map();
 
   public async getOrCreateRoom(code: string, teacherId: string): Promise<RoomState> {
     if (this.rooms.has(code)) {
       return this.rooms.get(code)!;
     }
 
-    // Attempt DB Lookup for persistent restoration
+    if (this.roomPromises.has(code)) {
+      return this.roomPromises.get(code)!;
+    }
+
+    const initPromise = (async () => {
+      // Attempt DB Lookup for persistent restoration
     let roomInDb = null;
     try {
       roomInDb = await prisma.classroom.findUnique({
@@ -86,23 +92,28 @@ class RoomStoreManager {
       }
     }
 
-    const roomState: RoomState = {
-      code,
-      teacherId: actualTeacherId,
-      maxParticipants,
-      isEnded,
-      participants: new Map(),
-      whiteboardElements,
-      chatMessages: [],
-      notesText,
-      topics,
-      currentTopicIndex,
-      isPublicAI: false,
-      activeQuiz: null,
-    };
+      const roomState: RoomState = {
+        code,
+        teacherId: actualTeacherId,
+        maxParticipants,
+        isEnded,
+        participants: new Map(),
+        whiteboardElements,
+        chatMessages: [],
+        notesText,
+        topics,
+        currentTopicIndex,
+        isPublicAI: false,
+        activeQuiz: null,
+      };
 
-    this.rooms.set(code, roomState);
-    return roomState;
+      this.rooms.set(code, roomState);
+      this.roomPromises.delete(code);
+      return roomState;
+    })();
+
+    this.roomPromises.set(code, initPromise);
+    return initPromise;
   }
 
   public getRoom(code: string): RoomState | undefined {

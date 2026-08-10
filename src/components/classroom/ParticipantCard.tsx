@@ -1,9 +1,9 @@
 'use client';
 
 // src/components/classroom/ParticipantCard.tsx
-// Google Meet style Video Participant Tile: Remote Audio playback, Unmuted remote streams, Speaking indicator, and Autoplay unlock
+// Google Meet style Video Participant Tile: Permanent video mounting, instant camera ON/OFF restoration, remote audio playback, speaking indicator, and autoplay unlock
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Participant } from '@/types';
 import { Mic, MicOff, Video, VideoOff, Hand, Star, UserX, VolumeX, Volume2, Activity } from 'lucide-react';
 
@@ -37,8 +37,8 @@ export const ParticipantCard: React.FC<ParticipantCardProps> = ({
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Attach MediaStream to Video Element and Handle Audio Autoplay
-  useEffect(() => {
+  // Bind video element to MediaStream and trigger playback
+  const attachAndPlayStream = useCallback(() => {
     const videoNode = videoRef.current;
     if (!videoNode || !stream) return;
 
@@ -58,6 +58,11 @@ export const ParticipantCard: React.FC<ParticipantCardProps> = ({
         }
       });
   }, [stream, isSelf, participant.name]);
+
+  // Re-verify stream attachment on mount, stream change, or camera toggle
+  useEffect(() => {
+    attachAndPlayStream();
+  }, [attachAndPlayStream, isVideoOff]);
 
   const handleUnlockAudio = () => {
     if (videoRef.current) {
@@ -79,43 +84,48 @@ export const ParticipantCard: React.FC<ParticipantCardProps> = ({
       }`}
       style={{ minHeight: '220px' }}
     >
-      {/* Video Element Container or Avatar Placeholder */}
-      {isVideoOff || !stream ? (
-        <div className="flex flex-col items-center justify-center p-6 text-center w-full h-full bg-slate-950/80">
-          <div
-            className={`w-20 h-20 rounded-full flex items-center justify-center text-indigo-300 font-bold text-2xl mb-2 shadow-inner transition-all ${
-              isSpeaking
-                ? 'bg-gradient-to-br from-emerald-900 to-indigo-950 border-2 border-emerald-400 scale-105'
-                : 'bg-gradient-to-br from-slate-800 to-indigo-950 border border-white/10'
-            }`}
-          >
-            {participant.name.slice(0, 2).toUpperCase()}
-          </div>
-          <span className="text-xs text-slate-300 font-medium">{participant.name}</span>
-          <span className="text-[10px] text-slate-500 font-mono mt-0.5">Camera Off</span>
+      {/* 
+        CRITICAL ARCHITECTURE: 
+        The <video> element remains PERMANENTLY mounted in the DOM. 
+        Toggling camera ON/OFF alters visual visibility and videoTrack.enabled, 
+        NEVER destroying the DOM node or unbinding srcObject.
+      */}
+      <div className="absolute inset-0 w-full h-full bg-slate-950 flex items-center justify-center overflow-hidden">
+        <video
+          ref={(node) => {
+            videoRef.current = node;
+            if (node && stream && node.srcObject !== stream) {
+              node.srcObject = stream;
+              node.play().catch(() => {});
+            }
+          }}
+          autoPlay
+          playsInline
+          muted={isSelf} // Local is muted to prevent echo, Remote is UNMUTED to play audio!
+          className={`w-full h-full object-cover transition-opacity duration-200 ${
+            isVideoOff || !stream ? 'opacity-0 pointer-events-none' : 'opacity-100'
+          } ${isSelf ? 'transform -scale-x-100' : ''}`}
+        />
+      </div>
 
-          {/* Hidden audio element so remote audio still plays when video is off */}
-          {!isSelf && stream && stream.getAudioTracks().length > 0 && (
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted={false}
-              className="hidden"
-            />
-          )}
+      {/* Avatar Placeholder Overlay (Visible when camera is OFF or stream missing) */}
+      <div
+        className={`absolute inset-0 flex flex-col items-center justify-center p-6 text-center w-full h-full bg-slate-950/90 backdrop-blur-sm transition-opacity duration-200 ${
+          isVideoOff || !stream ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none'
+        }`}
+      >
+        <div
+          className={`w-20 h-20 rounded-full flex items-center justify-center text-indigo-300 font-bold text-2xl mb-2 shadow-inner transition-all ${
+            isSpeaking
+              ? 'bg-gradient-to-br from-emerald-900 to-indigo-950 border-2 border-emerald-400 scale-105'
+              : 'bg-gradient-to-br from-slate-800 to-indigo-950 border border-white/10'
+          }`}
+        >
+          {participant.name.slice(0, 2).toUpperCase()}
         </div>
-      ) : (
-        <div className="w-full h-full bg-slate-950 relative flex items-center justify-center overflow-hidden min-h-[220px]">
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted={isSelf} // CRITICAL: Local is muted to prevent echo, Remote is UNMUTED to play audio!
-            className={`w-full h-full object-cover ${isSelf ? 'transform -scale-x-100' : ''}`}
-          />
-        </div>
-      )}
+        <span className="text-xs text-slate-300 font-medium">{participant.name}</span>
+        <span className="text-[10px] text-slate-500 font-mono mt-0.5">Camera Off</span>
+      </div>
 
       {/* Autoplay Audio Unlock Overlay */}
       {autoplayBlocked && !isSelf && (

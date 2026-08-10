@@ -39,7 +39,7 @@ export const ChatMessagePayloadSchema = z.object({
 
 export const ToggleMediaPayloadSchema = z.object({
   roomCode: z.string().min(1),
-  type: z.enum(['audio', 'video']),
+  type: z.enum(['audio', 'video', 'screen']),
   value: z.boolean(),
 });
 

@@ -199,19 +199,31 @@ app.prepare().then(() => {
 
     // Toggle Media (Mic/Cam)
     socket.on('toggle-media', (rawPayload: unknown) => {
-      if (socketRateLimiter.isRateLimited(socket.id, 'toggle-media', 10)) return;
       const parseResult = ToggleMediaPayloadSchema.safeParse(rawPayload);
-      if (!parseResult.success) return;
+      if (!parseResult.success) {
+        logger.warn({ err: parseResult.error, rawPayload }, 'toggle-media validation failed');
+        return;
+      }
 
       const { roomCode, type, value } = parseResult.data;
       const room = roomStore.getRoom(roomCode);
-      if (!room) return;
+      if (!room) {
+        logger.warn({ roomCode }, 'toggle-media room not found');
+        return;
+      }
 
       const participant = room.participants.get(socket.id);
       if (participant) {
         if (type === 'audio') participant.isMuted = value;
         if (type === 'video') participant.isVideoOff = value;
-        io.to(roomCode).emit('participant-updated', participant);
+        logger.info({ roomCode, socketId: socket.id, type, value }, 'Media state toggled');
+        io.to(roomCode).emit('participant-updated', { participant });
+      } else {
+        logger.warn({
+          socketId: socket.id,
+          roomCode,
+          existingKeys: Array.from(room.participants.keys()),
+        }, 'Participant not found in room for toggle-media');
       }
     });
 
@@ -228,7 +240,7 @@ app.prepare().then(() => {
       const participant = room.participants.get(socket.id);
       if (participant) {
         participant.isHandRaised = isHandRaised;
-        io.to(roomCode).emit('participant-updated', participant);
+        io.to(roomCode).emit('participant-updated', { participant });
       }
     });
 
@@ -333,7 +345,7 @@ app.prepare().then(() => {
       const participant = room.participants.get(targetSocketId);
       if (participant) {
         participant.isMuted = true;
-        io.to(roomCode).emit('participant-updated', participant);
+        io.to(roomCode).emit('participant-updated', { participant });
       }
     });
 
