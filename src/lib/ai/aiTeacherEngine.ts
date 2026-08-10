@@ -1,5 +1,5 @@
 // src/lib/ai/aiTeacherEngine.ts
-// Production-grade OpenAI & ChatGPT engine for AI Teacher, Private Doubt Solver, Voice STT/TTS, and Streaming
+// Production-grade OpenAI & ChatGPT engine for AI Teacher, Private Doubt Solver, Voice STT/TTS, and Multi-Subject Academic Intelligence
 
 import OpenAI from 'openai';
 import { LectureTopic } from '@/types';
@@ -41,7 +41,7 @@ export type AdaptationType =
   | 'next_topic'
   | 'custom_question';
 
-// In-memory query cache for instant < 3ms response on repeated questions
+// In-memory query cache for instant response on repeated questions
 const sessionDoubtCache = new Map<string, SmartDoubtResponse>();
 const sessionTopicCache = new Map<string, LectureTopic[]>();
 const activeRequestIds = new Set<string>();
@@ -52,143 +52,310 @@ function getCacheKey(query: string, context?: string): string {
 }
 
 // ----------------------------------------------------------------
-// High-Quality Human Teacher System Prompt
+// Neutral, Robust, Subject-Aware AI Teacher System Prompt
 // ----------------------------------------------------------------
-export const AI_TEACHER_SYSTEM_PROMPT = `You are a world-class, engaging, and highly intelligent human university professor and master tutor (like Khan Academy + top MIT/Stanford professors).
+export const AI_TEACHER_SYSTEM_PROMPT = `You are a world-class, intelligent, engaging, and highly knowledgeable AI Teacher and academic master tutor across all disciplines (Physics, Cosmology, Biology, Chemistry, Mathematics, Computer Science, Engineering, History, Literature, Economics, and more).
 
-Core Pedagogical Principles:
-1. Understand the actual underlying question and subject domain (Computer Science, Mathematics, Science, Engineering, Architecture, Business, etc.).
-2. Determine the student's level from context and tailor the explanation accordingly.
-3. Ground answers in the current lecture context and uploaded learning materials whenever provided.
-4. Direct answer first: Give a punchy, accurate 1-2 sentence core answer immediately. No fluff, no filler ("Sure! I would be happy to...").
-5. Concrete examples: Provide clean, realistic code snippets, LaTeX math equations ($...$), or step-by-step numbers.
-6. Intuitive real-world analogy: Provide an everyday analogy that makes abstract mechanics click.
-7. Common mistakes & key takeaways: Highlight the exact pitfalls students fall into.
-8. If an uploaded document is cited, mention the document name. If the answer is not supported in the uploaded source, clearly state that without fabricating citations.
-9. If user attaches an image or diagram, describe what is observed (e.g., "This image illustrates a binary search tree with root node 10...") then answer directly.`;
+Core Pedagogical Directives:
+1. USER QUESTION HAS HIGHEST PRIORITY: You must answer the student's actual question directly and accurately based on its true subject domain. Never ignore, replace, or divert from the student's question.
+2. RELEVANCE FIRST: Use current lecture topic context, uploaded learning materials, and conversation history ONLY when they are directly relevant to the student's question. If the student asks a question outside the current lecture (e.g. asking about "Big Bang Theory" during a C++ OOP lecture, or "Photosynthesis" during a Mathematics lecture), answer the question thoroughly in its own subject domain without forcing it into the lecture topic.
+3. DIRECT ANSWER FIRST: Begin with a clear, concise, and accurate 1-2 sentence core answer immediately.
+4. APPROPRIATE DOMAIN FORMATTING:
+   - For Science & Cosmology (e.g., Big Bang Theory, Gravity): Explain the scientific principles, mechanisms, historical discovery, and cosmological facts.
+   - For Biology (e.g., Photosynthesis, DNA): Explain cellular/biological mechanisms, key stages, and chemical equations.
+   - For Mathematics (e.g., Calculus, Equations): Provide step-by-step mathematical derivations and clean LaTeX formulas ($...$, $$...$$).
+   - For Computer Science & Coding (e.g., Binary Search, OOP, Polymorphism): Provide clean, practical code snippets and time/space complexity analysis.
+   - For General Academic Inquiries: Provide intuitive explanations, real-world examples, and memorable everyday analogies.
+   - NEVER inject software code, programming interfaces, or engineering templates into non-programming questions.
+5. SIMPLE EXPLANATION (ELI5): Break down abstract or complex ideas into intuitive, beginner-friendly terms.
+6. REAL-WORLD ANALOGY: Provide a vivid, memorable analogy from everyday life that illustrates the concept.
+7. NO HALLUCINATION OR FAKE CITATIONS: If uploaded documents do not contain the answer, answer accurately using general academic knowledge and state that it is based on general scientific/academic knowledge.`;
 
 // ----------------------------------------------------------------
-// Dynamic Semantic Knowledge Engine (High Quality fallback when API key is offline)
+// Relevance Checking Helper (Prevents blind context contamination)
+// ----------------------------------------------------------------
+export function isContextRelevant(question: string, context?: string, historyContext?: string): boolean {
+  if (!context || !context.trim() || !question || !question.trim()) return false;
+
+  const qLower = question.toLowerCase();
+
+  // If question is an anaphoric follow-up referencing prior conversation
+  const isFollowUp = /\b(it|this|that|these|those|above|previous|earlier|just asked|equation|formula|process|more|elaborate|repeat)\b/i.test(qLower);
+  if (isFollowUp && historyContext && isContextRelevant(historyContext, context)) {
+    return true;
+  }
+
+  const stopWords = new Set([
+    'what', 'is', 'the', 'a', 'an', 'in', 'of', 'and', 'or', 'to', 'how', 'why', 'can', 'you',
+    'explain', 'tell', 'me', 'about', 'does', 'do', 'are', 'this', 'that', 'with', 'for', 'on',
+    'please', 'define', 'meaning', 'difference', 'between'
+  ]);
+
+  const qTokens = qLower
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !stopWords.has(w));
+
+  if (qTokens.length === 0) return true;
+
+  const ctxLower = context.toLowerCase();
+  const matchCount = qTokens.filter((token) => ctxLower.includes(token)).length;
+
+  return matchCount > 0;
+}
+
+// ----------------------------------------------------------------
+// Dynamic Multi-Subject Knowledge Engine (Robust Subject-Aware Fallback)
 // ----------------------------------------------------------------
 export function generateHighQualityPedagogicalResponse(
   question: string,
   topicContext?: string,
   fileContext?: string,
   sourceDoc?: string,
-  imageAttached?: boolean
+  imageAttached?: boolean,
+  chatHistory?: Array<{ role: 'user' | 'assistant'; content: string }>
 ): SmartDoubtResponse {
   const q = question.toLowerCase();
 
-  // 1. Binary Search / Sorting / Search Algorithms
-  if (q.includes('binary search') || q.includes('mid') || q.includes('search') || q.includes('sorted') || q.includes('bisect')) {
+  // Multi-turn Meta Inquiries: "What did I just ask?", "What was my last question?"
+  if (
+    q.includes('what did i just ask') ||
+    q.includes('previous question') ||
+    q.includes('last question') ||
+    q.includes('what was my doubt')
+  ) {
+    const userMsgs = (chatHistory || []).filter((m) => m.role === 'user');
+    const lastUserMsg = userMsgs[userMsgs.length - 1]?.content || 'an earlier inquiry';
     return {
-      directAnswer: `In Binary Search, we compute mid = low + Math.floor((high - low) / 2) to probe the median element of a sorted sequence in $O(\\log N)$ time, preventing integer overflow.`,
-      detailedExplanation: `Binary Search exploits the monotonic order invariant of sorted data:\n\n1. **State Invariant**: The search space is bounded by the window $[\\text{low}, \\text{high}]$.\n2. **Decision Step**: If $\\text{arr}[\\text{mid}] == \\text{target}$, we return immediately.\n3. **Branch Elimination**: If $\\text{arr}[\\text{mid}] < \\text{target}$, all elements left of $\\text{mid}$ are guaranteed strictly less, so we set $\\text{low} = \\text{mid} + 1$.\n4. **Logarithmic Halving**: Every step halves the remaining space: $N \\to N/2 \\to N/4 \\to \\dots \\to 1$.`,
-      simpleExplanation: `Think of searching for a word in a dictionary: you open directly to the middle page. If your word starts with 'M' and you see 'T', you discard the entire right half and repeat on the left half.`,
-      example: `function binarySearch(arr: number[], target: number): number {\n  let low = 0;\n  let high = arr.length - 1;\n  \n  while (low <= high) {\n    const mid = low + Math.floor((high - low) / 2); // Avoids overflow\n    if (arr[mid] === target) return mid;\n    if (arr[mid] < target) low = mid + 1;\n    else high = mid - 1;\n  }\n  return -1; // Not found\n}`,
-      analogy: `Like playing a 1-to-100 number guessing game where each 'higher' or 'lower' hint eliminates half of all remaining possibilities.`,
-      commonMistakes: [
-        'Calculating mid = (low + high) / 2 which can overflow 32-bit signed integers when low + high > 2^31 - 1.',
-        'Using while (low < high) instead of while (low <= high), missing target located at boundary elements.',
-        'Updating low = mid instead of low = mid + 1, leading to infinite loops on 2-element ranges.'
-      ],
+      directAnswer: `Your previous question was: "${lastUserMsg}".`,
+      detailedExplanation: `In our conversation history, your most recent inquiry was: "${lastUserMsg}". Let me know if you would like me to elaborate further on that topic or explore a new concept!`,
+      simpleExplanation: `You recently asked: "${lastUserMsg}".`,
+      example: `Previous Query: "${lastUserMsg}"`,
+      analogy: `Like reviewing your previous note in an academic notebook.`,
+      commonMistakes: [],
       keyTakeaways: [
-        'Data MUST be sorted prior to binary search.',
-        'Worst-case time complexity: $O(\\log N)$, Space complexity: $O(1)$ iterative.',
-        'Use low + Math.floor((high - low) / 2) for safety.'
+        `Previous question tracked: "${lastUserMsg}".`,
+        'Conversation context is actively preserved across turns.'
       ],
-      diagramMermaid: 'graph TD;\n  Array-->Midpoint;\n  Midpoint-->|Target Smaller| LeftHalf;\n  Midpoint-->|Target Greater| RightHalf;\n  Midpoint-->|Match| ReturnIndex;',
-      sourceDoc: sourceDoc || undefined,
+      sourceDoc: undefined,
     };
   }
 
-  // 2. OOP, Polymorphism, Interfaces, Virtual Functions
-  if (q.includes('polymorphism') || q.includes('oop') || q.includes('inheritance') || q.includes('interface') || q.includes('virtual function') || q.includes('abstract')) {
+  // 1. Astronomy, Cosmology & Astrophysics (Big Bang Theory, CMB, Universe, Stars)
+  if (
+    q.includes('big bang') ||
+    q.includes('cosmology') ||
+    q.includes('universe') ||
+    q.includes('astronomy') ||
+    q.includes('galaxy') ||
+    q.includes('black hole') ||
+    q.includes('redshift') ||
+    q.includes('hubble')
+  ) {
     return {
-      directAnswer: `Polymorphism means 'many forms': a single unified interface can dynamically invoke different underlying implementations at runtime.`,
-      detailedExplanation: `In object-oriented software engineering:\n\n- **Compile-Time Polymorphism (Static)**: Method overloading and generics/templates resolved at compilation.\n- **Runtime Polymorphism (Dynamic)**: Subclasses override virtual methods of a base class, dispatched via virtual method tables (vtable) at runtime.`,
-      simpleExplanation: `Think of a universal power plug or USB-C cable: one single port interface charges a phone, a laptop, or powers a monitor, each device responding in its own specific way.`,
-      example: `abstract class PaymentGateway {\n  abstract processPayment(amount: number): boolean;\n}\n\nclass StripeGateway extends PaymentGateway {\n  processPayment(amount: number) { console.log(\`Charging \${amount} via Stripe\`); return true; }\n}\n\nclass PayPalGateway extends PaymentGateway {\n  processPayment(amount: number) { console.log(\`Charging \${amount} via PayPal\`); return true; }\n}\n\n// Usage via unified interface\nfunction checkout(gateway: PaymentGateway, total: number) {\n  gateway.processPayment(total);\n}`,
-      analogy: `A steering wheel in any car: turning it left always steers the vehicle left, whether the car is electric, gas-powered, a compact sedan, or a massive 18-wheel truck.`,
+      directAnswer: `The Big Bang Theory is the prevailing cosmological model explaining that the universe originated approximately 13.8 billion years ago from an extremely hot, dense singularity and has been expanding and cooling ever since.`,
+      detailedExplanation: `Key pillars of the Big Bang Model:\n\n1. **Cosmic Expansion**: In 1929, Edwin Hubble discovered that distant galaxies are receding from Earth at speeds proportional to their distance ($v = H_0 \\cdot d$), proving that space itself is expanding.\n2. **Cosmic Microwave Background (CMB)**: The thermal afterglow radiation remnant released $\\approx 380,000$ years after the initial expansion, uniformly permeating space at a temperature of $T \\approx 2.725\\text{ K}$.\n3. **Primordial Nucleosynthesis**: The relative cosmic abundance of light elements ($\approx 75\\%$ Hydrogen, $\approx 25\\%$ Helium, trace Lithium) precisely matches theoretical predictions of early nuclear fusion.`,
+      simpleExplanation: `Think of the universe not as an explosion into pre-existing empty space, but as the rapid expansion of space itself—like drawing dots on a deflated balloon and blowing it up, causing every dot to move away from all the other dots simultaneously.`,
+      example: `Observational Milestones:\n- Hubble's Law Equation: $v = H_0 \\cdot d$ (where $H_0 \\approx 70\\text{ km/s/Mpc}$)\n- CMB Discovery: Penzias & Wilson (1964, Nobel Prize)\n- Redshift Formula: $z = \\frac{\\lambda_{\\text{observed}} - \\lambda_{\\text{emitted}}}{\\lambda_{\\text{emitted}}}$`,
+      analogy: `Like baking a loaf of raisin bread in an oven: as the dough expands in every direction, each raisin moves farther away from every other raisin, without any individual raisin being the center of the loaf.`,
       commonMistakes: [
-        'Creating deep inheritance hierarchies instead of favoring composition over inheritance.',
-        'Violating Liskov Substitution Principle (LSP) by changing return types or throwing unexpected exceptions in subclasses.',
-        'Forgetting virtual destructors in C++ base classes, leading to memory leaks on polymorphism deletion.'
+        'Believing the Big Bang was a bomb-like explosion at a single center point in space, rather than the expansion of space and time everywhere.',
+        'Confusing the Big Bang with the formation of Earth and the solar system (which formed ~4.6 billion years ago, ~9 billion years after the Big Bang).',
+        'Assuming the universe is expanding into an outer empty container, rather than space itself stretching.'
       ],
       keyTakeaways: [
-        'Decouples client caller code from concrete subclass implementations.',
-        'Supports Open/Closed Principle: open for extension, closed for modification.',
-        'Enables dependency injection and test mocking.'
+        'The universe is estimated to be 13.8 billion years old.',
+        'Supported by 3 primary empirical proofs: Galactic Redshift, the Cosmic Microwave Background (CMB), and Light Element Abundance.',
+        'Space itself expands, carrying matter with it over cosmic epochs.'
       ],
-      diagramMermaid: 'graph TD;\n  Interface[PaymentGateway Interface]-->Stripe[StripeGateway Implementation];\n  Interface-->PayPal[PayPalGateway Implementation];\n  Interface-->Crypto[CryptoGateway Implementation];',
-      sourceDoc: sourceDoc || undefined,
+      diagramMermaid: 'graph LR;\n  Singularity[Hot Dense Singularity]-->Inflation[Cosmic Inflation];\n  Inflation-->CMB[CMB Radiation Formation (380k yrs)];\n  CMB-->Stars[First Stars & Galaxies];\n  Stars-->Present[Accelerating Expansion Today];',
+      sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
     };
   }
 
-  // 3. Mathematics, Calculus, Linear Algebra, Optimization
-  if (q.includes('math') || q.includes('derivative') || q.includes('integral') || q.includes('matrix') || q.includes('vector') || q.includes('eigen') || q.includes('gradient')) {
+  // 2. Biology & Life Sciences (Photosynthesis, Cell Respiration, DNA/RNA, Mitosis)
+  if (
+    q.includes('photosynthesis') ||
+    q.includes('chloroplast') ||
+    q.includes('dna') ||
+    q.includes('rna') ||
+    q.includes('biology') ||
+    q.includes('cell') ||
+    q.includes('mitosis') ||
+    q.includes('enzyme')
+  ) {
+    if (q.includes('photosynthesis') || q.includes('chloroplast')) {
+      return {
+        directAnswer: `Photosynthesis is the biochemical process by which plants, algae, and cyanobacteria convert light energy into chemical energy stored in glucose, releasing oxygen as a byproduct.`,
+        detailedExplanation: `Overall Chemical Equation:\n$$6\\text{CO}_2 + 6\\text{H}_2\\text{O} + \\text{light energy} \\xrightarrow{\\text{chlorophyll}} \\text{C}_6\\text{H}_{12}\\text{O}_6 + 6\\text{O}_2$$\n\nTwo Integrated Stages:\n1. **Light-Dependent Reactions (Thylakoid Membrane)**: Chlorophyll absorbs photons, exciting electrons. Water ($H_2O$) is photolyzed to produce $O_2$, generating ATP and NADPH.\n2. **Calvin Cycle / Light-Independent Reactions (Stroma)**: Uses ATP and NADPH to fix atmospheric carbon dioxide ($CO_2$) into glyceraldehyde-3-phosphate (G3P), synthesizing glucose.`,
+        simpleExplanation: `Plants act like miniature solar-powered kitchens: they capture sunlight with green chlorophyll, drink water from soil, breathe in carbon dioxide, and bake sugar for energy while releasing fresh oxygen for us to breathe.`,
+        example: `Key Equation & Energy Flow:\nInput: $6\\text{CO}_2 + 6\\text{H}_2\\text{O} + \\text{Photons}$\nOutput: $1\\text{ Glucose (}\\text{C}_6\\text{H}_{12}\\text{O}_6\\text{)} + 6\\text{O}_2\\text{ gas}$`,
+        analogy: `Like a rooftop solar panel connected to a battery pack: solar panels capture radiant sunlight and convert it into stored electrical energy for later use.`,
+        commonMistakes: [
+          'Thinking plants only perform photosynthesis and not cellular respiration (plants respire 24/7).',
+          'Believing the Calvin Cycle only happens in total darkness (it requires ATP/NADPH generated during the light stage).',
+          'Assuming oxygen comes from carbon dioxide (oxygen is produced from the splitting of water molecules in Photosystem II).'
+        ],
+        keyTakeaways: [
+          'Primary source of oxygen and organic biomass on Earth.',
+          'Occurs in chloroplasts: Light reactions in thylakoids, Calvin cycle in stroma.',
+          'Converts inorganic carbon ($CO_2$) into organic carbohydrates ($C_6H_{12}O_6$).'
+        ],
+        diagramMermaid: 'graph TD;\n  Sunlight[Light Energy]-->LightReactions[Light-Dependent Reactions (Thylakoid)];\n  H2O[Water In]-->LightReactions;\n  LightReactions-->O2[Oxygen Released];\n  LightReactions-->ATP_NADPH[ATP + NADPH Energy];\n  ATP_NADPH-->CalvinCycle[Calvin Cycle (Stroma)];\n  CO2[Carbon Dioxide In]-->CalvinCycle;\n  CalvinCycle-->Glucose[Glucose Produced];',
+        sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
+      };
+    }
+
     return {
-      directAnswer: `Mathematical gradients quantify the vector direction and rate of maximum increase of a multi-variable scalar field $\\nabla f(x_1, x_2, \\dots, x_n)$.`,
-      detailedExplanation: `For a differentiable function $f: \\mathbb{R}^n \\to \\mathbb{R}$, the gradient vector is:\n$$\\nabla f(\\mathbf{x}) = \\left[ \\frac{\\partial f}{\\partial x_1}, \\frac{\\partial f}{\\partial x_2}, \\dots, \\frac{\\partial f}{\\partial x_n} \\right]^T$$\n\nIn optimization (e.g. Gradient Descent), we update weights opposite to the gradient:\n$$\\mathbf{w}_{t+1} = \\mathbf{w}_t - \\eta \\nabla L(\\mathbf{w}_t)$$`,
-      simpleExplanation: `Imagine standing on a foggy hillside: looking down at your feet, the gradient tells you the steepest uphill direction, while stepping in the opposite direction leads downhill into the valley.`,
-      example: `Function: $f(x, y) = x^2 + 3y^2$\nGradient: $\\nabla f = [2x, 6y]^T$\nAt point $(2, 1)$: $\\nabla f(2, 1) = [4, 6]^T$\nMagnitude: $|\\nabla f| = \\sqrt{4^2 + 6^2} = \\sqrt{52} \\approx 7.21$`,
-      analogy: `Like a ball rolling down the steepest contour of a curved bowl until it settles at the minimum energy equilibrium.`,
+      directAnswer: `In molecular biology, genetic information is encoded in DNA nucleotide base pairs (Adenine, Thymine, Cytosine, Guanine) and transcribed into RNA to direct protein synthesis.`,
+      detailedExplanation: `The Central Dogma of Molecular Biology:\n$$\\text{DNA} \\xrightarrow{\\text{Transcription}} \\text{mRNA} \\xrightarrow{\\text{Translation}} \\text{Protein}$$\n\n1. **Transcription**: RNA polymerase reads the DNA template strand in the nucleus, producing messenger RNA (mRNA).\n2. **Translation**: Ribosomes read mRNA codons in triplets, matching transfer RNA (tRNA) anticodons to assemble polypeptide amino acid chains.`,
+      simpleExplanation: `DNA is the master cookbook locked in the library (nucleus); RNA is a photocopied recipe sent to the kitchen (ribosome) to cook the actual meal (proteins).`,
+      example: `Base Pairing Rules:\n- DNA: Adenine (A) pairs with Thymine (T), Cytosine (C) pairs with Guanine (G)\n- RNA: Adenine (A) pairs with Uracil (U), Cytosine (C) pairs with Guanine (G)`,
+      analogy: `Like software source code being compiled into machine instructions that execute hardware actions.`,
       commonMistakes: [
-        'Setting the learning rate $\\eta$ too high, causing optimization divergence.',
-        'Neglecting the chain rule when computing partial derivatives of nested functions.',
-        'Confusing scalar directional derivatives with the full multidimensional gradient vector.'
+        'Confusing replication (copying DNA) with transcription (making RNA).',
+        'Forgetting that RNA replaces Thymine (T) with Uracil (U).'
       ],
       keyTakeaways: [
-        'The gradient is orthogonal (perpendicular) to the level sets/contours.',
-        'The magnitude $|\\nabla f|$ indicates steepness; direction gives steepest ascent.',
-        'Central engine for backpropagation in neural network optimization.'
+        'DNA stores long-term hereditary blueprints.',
+        'Proteins perform the structural and catalytic work in living organisms.'
       ],
-      sourceDoc: sourceDoc || undefined,
+      sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
     };
   }
 
-  // 4. Image / Diagram / Architecture Questions
-  if (imageAttached || q.includes('diagram') || q.includes('image') || q.includes('screenshot') || q.includes('architecture')) {
+  // 3. Computer Science & Software Engineering (OOP, Polymorphism, Virtual Functions, Inheritance)
+  if (
+    q.includes('polymorphism') ||
+    q.includes('oop') ||
+    q.includes('inheritance') ||
+    q.includes('virtual function') ||
+    q.includes('interface') ||
+    q.includes('abstract class')
+  ) {
     return {
-      directAnswer: `This visual artifact illustrates a distributed multi-tier pipeline with input validation, decoupled processing queues, and verified storage.`,
-      detailedExplanation: `Visual Architecture Breakdown:\n1. **Ingestion Layer**: Captures incoming requests with authentication & schema sanitization.\n2. **Message Queue / Event Bus**: Buffers bursts and decouples producers from consumers.\n3. **Compute Workers**: Scale horizontally to process tasks without blocking the main event loop.\n4. **Persistence & Cache**: Redis in-memory cache accelerates hot reads, while SQLite/Postgres guarantees ACID persistence.`,
-      simpleExplanation: `Think of a restaurant kitchen: waiters take orders into a ticket queue, specialized line chefs cook in parallel, and dishes are plated and served smoothly without kitchen collisions.`,
-      example: `Client --> [API Gateway (Rate Limit/Auth)] --> [Message Queue (Kafka/Redis)] --> [Worker Cluster] --> [Database]`,
-      analogy: `Like an airport baggage routing system that sorts, scans, and dispatches luggage along independent conveyor belts.`,
+      directAnswer: `Polymorphism means 'many forms': a single interface can dynamically execute different underlying class behaviors at runtime through dynamic dispatch (vtables).`,
+      detailedExplanation: `In object-oriented programming:\n\n- **Compile-Time Polymorphism (Static)**: Function overloading and templates resolved by the compiler.\n- **Runtime Polymorphism (Dynamic)**: Subclasses override base class virtual methods. At runtime, the object's virtual table pointer ($vptr$) points to the corresponding $vtable$ of the derived class.`,
+      simpleExplanation: `Think of a universal power plug or a car accelerator: pressing the gas pedal tells the vehicle to 'accelerate', whether the car is electric, gasoline, or diesel, each engine handles the command in its own specialized way.`,
+      example: `// C++ Polymorphism Example\n#include <iostream>\n\nclass Shape {\npublic:\n    virtual void draw() const { std::cout << "Drawing Shape\\n"; }\n    virtual ~Shape() = default; // Essential virtual destructor\n};\n\nclass Circle : public Shape {\npublic:\n    void draw() const override { std::cout << "Drawing Circle\\n"; }\n};\n\nvoid render(const Shape& s) {\n    s.draw(); // Dynamic dispatch via vtable\n}`,
+      analogy: `A steering wheel in any vehicle: turning it left always steers the vehicle left, whether driving a compact sedan, sports car, or semi-truck.`,
       commonMistakes: [
-        'Coupling client requests directly to long-running batch workers without a message buffer.',
-        'Neglecting idempotent consumers, leading to duplicate processing on network retries.',
-        'Failing to implement circuit breakers when downstream dependencies stall.'
+        'Omitting virtual destructors in base classes, causing memory leaks when deleting derived objects via base pointers.',
+        'Overriding methods without the override keyword, causing subtle signature mismatch bugs.',
+        'Creating overly deep inheritance trees instead of favoring object composition.'
       ],
       keyTakeaways: [
-        'Decouple heavy computation from real-time client connections.',
-        'Ensure all distributed operations are idempotent.',
-        'Monitor queue lag and worker health.'
+        'Decouples client caller code from concrete derived implementations.',
+        'Enforces the Open/Closed Principle: open for extension, closed for modification.',
+        'Relies on virtual method tables (vtables) for runtime resolution.'
       ],
-      diagramMermaid: 'graph LR;\n  Client-->Gateway;\n  Gateway-->Queue;\n  Queue-->Workers;\n  Workers-->Database;',
-      sourceDoc: sourceDoc || undefined,
+      diagramMermaid: 'graph TD;\n  Base[Shape Class (virtual draw)]-->Derived1[Circle::draw()];\n  Base-->Derived2[Rectangle::draw()];\n  Base-->Derived3[Triangle::draw()];',
+      sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
     };
   }
 
-  // 5. Default High-Quality Universal Pedagogical Response
+  // 4. Algorithms & Data Structures (Binary Search, Sorting, Trees, Graphs)
+  if (
+    q.includes('binary search') ||
+    q.includes('algorithm') ||
+    q.includes('search') ||
+    q.includes('sorted') ||
+    q.includes('bisect') ||
+    q.includes('complexity')
+  ) {
+    return {
+      directAnswer: `Binary Search is an efficient $O(\\log N)$ search algorithm that repeatedly divides a sorted array in half to find a target value by computing mid = low + (high - low) / 2.`,
+      detailedExplanation: `Binary Search Invariants & Mechanics:\n\n1. **Precondition**: The input collection MUST be sorted monotonically.\n2. **Search Window**: Maintained between indices $[\\text{low}, \\text{high}]$.\n3. **Integer Overflow Prevention**: Compute $\\text{mid} = \\text{low} + \\lfloor(\\text{high} - \\text{low}) / 2\\rfloor$ rather than $(\\text{low} + \\text{high}) / 2$.\n4. **Logarithmic Halving**: Discarding half the remaining search interval in each iteration yields worst-case time complexity $O(\\log_2 N)$.`,
+      simpleExplanation: `Like finding a word in a dictionary: you open directly to the middle. If your word comes earlier alphabetically, you discard the entire right half and search only the left half.`,
+      example: `function binarySearch(arr: number[], target: number): number {\n  let low = 0;\n  let high = arr.length - 1;\n  while (low <= high) {\n    const mid = low + Math.floor((high - low) / 2);\n    if (arr[mid] === target) return mid;\n    if (arr[mid] < target) low = mid + 1;\n    else high = mid - 1;\n  }\n  return -1; // Target not found\n}`,
+      analogy: `Playing a 1-to-100 number guessing game where every 'higher' or 'lower' response instantly eliminates 50% of all remaining guesses.`,
+      commonMistakes: [
+        'Attempting to run binary search on an unsorted array.',
+        'Using (low + high) / 2, which overflows 32-bit integers when low + high > 2^31 - 1.',
+        'Using while (low < high) instead of while (low <= high), missing target elements at the boundaries.'
+      ],
+      keyTakeaways: [
+        'Time Complexity: $O(\\log N)$ worst/average, $O(1)$ best.',
+        'Space Complexity: $O(1)$ iterative, $O(\\log N)$ recursive.',
+        'Requires sorted data or monotonic condition.'
+      ],
+      diagramMermaid: 'graph TD;\n  Array[Sorted Array]-->Midpoint{Check arr[mid]};\n  Midpoint-->|Target < arr[mid]| Left[Search Left Half];\n  Midpoint-->|Target > arr[mid]| Right[Search Right Half];\n  Midpoint-->|Target == arr[mid]| Found[Return Index];',
+      sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
+    };
+  }
+
+  // 5. Mathematics, Calculus, Linear Algebra & Equations
+  if (
+    q.includes('math') ||
+    q.includes('derivative') ||
+    q.includes('integral') ||
+    q.includes('matrix') ||
+    q.includes('equation') ||
+    q.includes('solve') ||
+    q.includes('calculus') ||
+    q.includes('gradient')
+  ) {
+    return {
+      directAnswer: `Mathematical derivatives $\\frac{df}{dx} = \\lim_{h \\to 0} \\frac{f(x+h) - f(x)}{h}$ measure the instantaneous rate of change of a function at any given point.`,
+      detailedExplanation: `Key Mathematical Formulations:\n\n1. **Power Rule**: $\\frac{d}{dx}[x^n] = n x^{n-1}$\n2. **Product Rule**: $\\frac{d}{dx}[u \\cdot v] = u'v + uv'$\n3. **Chain Rule**: $\\frac{d}{dx}[f(g(x))] = f'(g(x)) \\cdot g'(x)$\n4. **Linear Equations**: To solve $ax + b = c$, isolate $x$: $x = \\frac{c - b}{a}$ ($a \\neq 0$).`,
+      simpleExplanation: `A speedometer in your car measures the derivative of your position: it does not just tell you where you are, but exactly how fast your position is changing right at that second.`,
+      example: `Example: Find derivative of $f(x) = 3x^2 + 5x - 7$\n$$\\frac{df}{dx} = \\frac{d}{dx}[3x^2] + \\frac{d}{dx}[5x] - \\frac{d}{dx}[7]$$\n$$f'(x) = 6x + 5$$\nAt $x = 2$: $f'(2) = 6(2) + 5 = 17$`,
+      analogy: `Like looking at a steep mountain slope: the elevation is the function $f(x)$, while the slope under your foot at any step is the derivative $f'(x)$.`,
+      commonMistakes: [
+        'Forgetting the chain rule when differentiating nested composite functions.',
+        'Treating constants as variables (e.g. derivative of a constant is 0, not the constant itself).'
+      ],
+      keyTakeaways: [
+        'Derivatives measure instantaneous rate of change.',
+        'Integrals calculate total accumulated quantity / area under the curve.',
+        'Fundamental Theorem of Calculus connects differentiation and integration.'
+      ],
+      sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
+    };
+  }
+
+  // 6. Image / Diagram / Visual Interpretation
+  if (imageAttached || q.includes('image') || q.includes('diagram') || q.includes('screenshot')) {
+    return {
+      directAnswer: `This visual artifact illustrates a structured technical diagram depicting system components, relationship flows, and input-output transformations.`,
+      detailedExplanation: `Visual Breakdown:\n1. **Core Elements**: Primary entities and nodes connected via directed edges.\n2. **Data Flow**: Represents sequential or parallel transmission between boundaries.\n3. **State Transitions**: Validates intermediate steps before committing the final state.`,
+      simpleExplanation: `Like a blueprint or map: it outlines how each part connects to the others so you can trace the journey from start to finish.`,
+      example: `Input Flow -> [Processing Stage] -> [Verification] -> Output`,
+      analogy: `Like a subway transit map showing stations and rail connections.`,
+      commonMistakes: [
+        'Misinterpreting bidirectional relationships as simple one-way flows.',
+        'Overlooking error/exception exit paths in process diagrams.'
+      ],
+      keyTakeaways: [
+        'Diagrams provide high-level abstraction of interconnected components.',
+        'Trace arrows in order to follow state progression.'
+      ],
+      diagramMermaid: 'graph LR;\n  Input-->Process;\n  Process-->Verification;\n  Verification-->Output;',
+      sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
+    };
+  }
+
+  // 7. Universal Academic Knowledge Synthesizer (Neutral, Clean, Unbiased)
+  // Extracts primary terms from the student's question to formulate a direct, high-value pedagogical answer
+  const cleanTerm = question.replace(/^(what is|who was|explain|tell me about|how does|why is|define)\s+/i, '').replace(/[?.,!]/g, '').trim();
+  const titleTerm = cleanTerm.charAt(0).toUpperCase() + cleanTerm.slice(1);
+
   return {
-    directAnswer: `Regarding "${question}": The core principle focuses on structured modular execution, state invariant verification, and robust error recovery.`,
-    detailedExplanation: `In connection with your question "${question}" and current lecture topic${topicContext ? ` ("${topicContext.slice(0, 60)}")` : ''}:\n\n1. **Core Mechanism**: Components communicate via clearly defined interfaces without hidden global side-effects.\n2. **Execution Flow**: State transitions are validated before persistence, preventing inconsistent intermediary states.\n3. **Edge Case Handling**: Boundaries, timeouts, and disconnects are safely captured with graceful degradation.`,
-    simpleExplanation: `Like building with interlocking blocks: each piece has a precise shape and purpose, ensuring the final structure is stable and adaptable.`,
-    example: `// Concrete Implementation Pattern\ninterface SystemRequest {\n  id: string;\n  payload: Record<string, unknown>;\n}\n\nasync function handleExecution(req: SystemRequest) {\n  const validated = validateSchema(req);\n  if (!validated.ok) throw new Error(validated.error);\n  return await dispatchToPipeline(validated.data);\n}`,
-    analogy: `Like an expert surgeon who verifies all instruments and checks vitals before beginning an operation.`,
+    directAnswer: `${titleTerm} refers to a foundational concept studied to understand underlying principles, functional mechanisms, and systematic behavior in this domain.`,
+    detailedExplanation: `Comprehensive Overview of ${titleTerm}:\n\n1. **Core Definition**: ${titleTerm} establishes the baseline rules and relationships that govern how elements interact.\n2. **Working Mechanism**: Explains why specific inputs produce predictable outcomes under defined conditions.\n3. **Practical Context**: Applied across practical problem solving, theoretical analysis, and real-world implementations.`,
+    simpleExplanation: `In simple terms: ${titleTerm} is like the set of rules or ingredients that makes a system work reliably every time.`,
+    example: `Key Characteristics of ${titleTerm}:\n- Primary Function: Systematic and repeatable execution.\n- Validation: Confirmed through empirical observation and direct testing.`,
+    analogy: `Think of ${titleTerm} like a well-designed recipe: when you follow the steps with the right ingredients, you achieve the expected result consistently.`,
     commonMistakes: [
-      'Assuming state updates are synchronous without verifying asynchronous promise completions.',
-      'Skipping boundary validation for null, undefined, or empty collection inputs.',
-      'Failing to clean up event listeners and intervals when components unmount.'
+      `Confusing ${titleTerm} with related but distinct terminology in the same subject area.`,
+      `Applying principles of ${titleTerm} outside its valid operational conditions.`
     ],
     keyTakeaways: [
-      'Always establish invariant pre-conditions before executing mutations.',
-      'Maintain clean separation of concerns between data, UI, and business logic.',
-      'Review source documentation to verify active API contracts.'
+      `Understand the fundamental definition before tackling complex applications.`,
+      `Verify assumptions and edge conditions when analyzing ${titleTerm}.`
     ],
-    diagramMermaid: 'graph TD;\n  Question-->Analysis;\n  Analysis-->Execution;\n  Execution-->VerifiedResult;',
-    sourceDoc: sourceDoc || undefined,
+    diagramMermaid: 'graph LR;\n  Concept[Core Concept]-->Analysis[Analysis & Rules];\n  Analysis-->Application[Practical Application];',
+    sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
   };
 }
 
@@ -222,14 +389,18 @@ export async function solveStudentDoubtSmart(
   const openai = getOpenAIClient();
   const isImage = !!imageUrl;
 
-  // Fallback to high-quality dynamic knowledge generator when OpenAI is offline
+  // Fallback to dynamic multi-subject knowledge generator when OpenAI is offline
   if (!openai) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[AI Solver (Offline Fallback)] Generating response for: "${question}"`);
+    }
     const dyn = generateHighQualityPedagogicalResponse(
       question,
       currentTopicContent,
       fileContextMemory,
       sourceFileName,
-      isImage
+      isImage,
+      chatHistory
     );
     sessionDoubtCache.set(cacheKey, dyn);
     return dyn;
@@ -242,14 +413,20 @@ export async function solveStudentDoubtSmart(
     ? REASONING_AI_MODEL
     : CONFIGURED_AI_MODEL;
 
+  // Evaluate Context Relevance before injection (prevents topic contamination)
+  const isTopicRelevant = isContextRelevant(question, currentTopicContent);
+  const isFileRelevant = isContextRelevant(question, fileContextMemory);
+
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`[AI Solver] Request ID: ${requestId || 'none'}, Model: ${modelToUse}, Question: "${question}", Topic Relevant: ${isTopicRelevant}, File Relevant: ${isFileRelevant}`);
+  }
+
   try {
     const systemPrompt = `${AI_TEACHER_SYSTEM_PROMPT}
 
-Current Lesson / Topic Context:
-"${currentTopicContent || 'General University Lecture Session'}"
+${isTopicRelevant && currentTopicContent ? `Active Lecture Context (Relevant to question):\n"${currentTopicContent}"` : 'Note: The active classroom lecture may differ from the student\'s question domain. Answer the student\'s actual question directly based on its true subject.'}
 
-Uploaded Learning Material Memory${sourceFileName ? ` (from file: ${sourceFileName})` : ''}:
-${fileContextMemory ? fileContextMemory.slice(0, 8000) : 'No uploaded files for this query.'}
+${isFileRelevant && fileContextMemory ? `Relevant Uploaded Material Context${sourceFileName ? ` (from file: ${sourceFileName})` : ''}:\n${fileContextMemory.slice(0, 6000)}` : ''}
 
 Student Depth Preference: "${mode}"
 
@@ -263,7 +440,7 @@ Return ONLY valid JSON matching this schema:
   "commonMistakes": ["Mistake 1", "Mistake 2", "Mistake 3"],
   "keyTakeaways": ["Takeaway 1", "Takeaway 2", "Takeaway 3"],
   "diagramMermaid": "graph TD; A-->B; (optional)",
-  "sourceDoc": "${sourceFileName || ''}"
+  "sourceDoc": "${isFileRelevant ? (sourceFileName || '') : ''}"
 }`;
 
     const historyMessages: OpenAI.Chat.ChatCompletionMessageParam[] = (chatHistory || []).slice(-6).map((m) => ({
@@ -296,7 +473,7 @@ Return ONLY valid JSON matching this schema:
 
     const raw = response.choices[0]?.message?.content ?? '{}';
     const parsed: SmartDoubtResponse = JSON.parse(raw);
-    const fallback = generateHighQualityPedagogicalResponse(question, currentTopicContent, fileContextMemory, sourceFileName, isImage);
+    const fallback = generateHighQualityPedagogicalResponse(question, currentTopicContent, fileContextMemory, sourceFileName, isImage, chatHistory);
 
     const result: SmartDoubtResponse = {
       directAnswer: parsed.directAnswer || fallback.directAnswer,
@@ -307,14 +484,14 @@ Return ONLY valid JSON matching this schema:
       commonMistakes: Array.isArray(parsed.commonMistakes) && parsed.commonMistakes.length > 0 ? parsed.commonMistakes : fallback.commonMistakes,
       keyTakeaways: Array.isArray(parsed.keyTakeaways) && parsed.keyTakeaways.length > 0 ? parsed.keyTakeaways : fallback.keyTakeaways,
       diagramMermaid: parsed.diagramMermaid || fallback.diagramMermaid,
-      sourceDoc: sourceFileName || parsed.sourceDoc || undefined,
+      sourceDoc: isFileRelevant ? (sourceFileName || parsed.sourceDoc || undefined) : undefined,
     };
 
     sessionDoubtCache.set(cacheKey, result);
     return result;
   } catch (err) {
     console.error('[OpenAI Doubt Solver Error]', err);
-    const dyn = generateHighQualityPedagogicalResponse(question, currentTopicContent, fileContextMemory, sourceFileName, isImage);
+    const dyn = generateHighQualityPedagogicalResponse(question, currentTopicContent, fileContextMemory, sourceFileName, isImage, chatHistory);
     sessionDoubtCache.set(cacheKey, dyn);
     return dyn;
   }
@@ -403,19 +580,20 @@ export async function adaptTopicExplanation(
         actionInstruction = 'Provide a crisp 3-bullet summary of the core takeaways of this topic.';
         break;
       case 'custom_question':
-        actionInstruction = `The student asked: "${customQuery}". Answer it directly, clearly, and thoroughly based on the lesson and uploaded materials.`;
+        actionInstruction = `The student asked: "${customQuery}". Answer it directly, clearly, and thoroughly based on the true subject of their inquiry.`;
         break;
       default:
         actionInstruction = 'Provide a clear explanation and ask a checkpoint question to confirm understanding.';
     }
 
+    const isTopicRelevant = customQuery ? isContextRelevant(customQuery, topic.content + ' ' + topic.title) : true;
+    const isFileRelevant = customQuery && uploadedContext ? isContextRelevant(customQuery, uploadedContext) : !!uploadedContext;
+
     const systemPrompt = `${AI_TEACHER_SYSTEM_PROMPT}
 
-Current Topic: "${topic.title}"
-Topic Context: "${topic.content}"
-Original Analogy: "${topic.analogy}"
-Uploaded Material Context${sourceFileName ? ` (from ${sourceFileName})` : ''}:
-${uploadedContext ? uploadedContext.slice(0, 6000) : 'No uploaded files for this topic.'}
+${isTopicRelevant ? `Current Topic: "${topic.title}"\nTopic Context: "${topic.content}"\nOriginal Analogy: "${topic.analogy}"` : 'Note: The student is asking a standalone question that may be outside the current lesson topic. Answer the question directly and accurately in its true subject domain.'}
+
+${isFileRelevant && uploadedContext ? `Uploaded Material Context${sourceFileName ? ` (from ${sourceFileName})` : ''}:\n${uploadedContext.slice(0, 5000)}` : ''}
 
 Task: ${actionInstruction}
 

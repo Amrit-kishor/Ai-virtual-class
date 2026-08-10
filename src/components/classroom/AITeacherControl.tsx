@@ -235,14 +235,17 @@ export const AITeacherControl: React.FC<AITeacherControlProps> = ({
     setIsAdapting(false);
   };
 
-  // ----------------------------------------------------------------
   // Step Adaptation Actions (Explains & Automatically Speaks)
   // ----------------------------------------------------------------
   const handleAdapt = async (action: string, customText?: string) => {
+    const queryToSend = (customText !== undefined ? customText : (followUpQuestion || liveTranscript)).trim();
+    if (action === 'custom_question' && !queryToSend) return;
+
     setIsAdapting(true);
     setActiveAdaptation(action);
     setAdaptationError(null);
     setLastFailedAction(action);
+    setFollowUpQuestion('');
     stopSpeech();
 
     abortControllerRef.current = new AbortController();
@@ -255,7 +258,7 @@ export const AITeacherControl: React.FC<AITeacherControlProps> = ({
         body: JSON.stringify({
           action,
           topic: currentTopic,
-          customQuery: customText || followUpQuestion,
+          customQuery: queryToSend || undefined,
           uploadedContext: fileContextMemory,
           sourceFileName: activeSourceDoc || sourceFileName,
         }),
