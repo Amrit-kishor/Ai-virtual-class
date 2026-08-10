@@ -170,6 +170,23 @@ export interface QuizHistoryItem {
   submittedAt: string;
 }
 
+export const SUGGESTED_QUIZ_TOPICS = [
+  'Data Structures',
+  'Algorithms',
+  'C++ OOP',
+  'Java Core',
+  'Python Programming',
+  'DBMS & SQL',
+  'Operating Systems',
+  'Computer Networks',
+  'Web Development',
+  'Mathematics (Calculus & Linear Algebra)',
+  'Physics (Mechanics & Electromagnetism)',
+  'System Design & Architecture',
+  'Machine Learning Basics',
+  'Cybersecurity & Cryptography',
+];
+
 export interface QuizSubmissionResult {
   submissionId: string;
   quizId: string;

@@ -7,8 +7,8 @@ import {
   DetailedQuestionReview,
   QuizEvaluationResult,
   QuizHistoryItem,
+  SUGGESTED_QUIZ_TOPICS,
 } from '@/types';
-import { SUGGESTED_QUIZ_TOPICS } from '@/lib/ai/aiQuizEngine';
 import {
   Trophy,
   Sparkles,

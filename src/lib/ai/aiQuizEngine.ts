@@ -2,28 +2,13 @@
 // Robust AI & Custom Quiz generation, deterministic evaluation, and performance analytics engine.
 
 import OpenAI from 'openai';
-import { QuizQuestion, DetailedQuestionReview, QuizEvaluationResult } from '@/types';
+import { QuizQuestion, DetailedQuestionReview, QuizEvaluationResult, SUGGESTED_QUIZ_TOPICS } from '@/types';
+
+export { SUGGESTED_QUIZ_TOPICS };
 
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
-
-export const SUGGESTED_QUIZ_TOPICS = [
-  'Data Structures',
-  'Algorithms',
-  'C++ OOP',
-  'Java Core',
-  'Python Programming',
-  'DBMS & SQL',
-  'Operating Systems',
-  'Computer Networks',
-  'Web Development',
-  'Mathematics (Calculus & Linear Algebra)',
-  'Physics (Mechanics & Electromagnetism)',
-  'System Design & Architecture',
-  'Machine Learning Basics',
-  'Cybersecurity & Cryptography',
-];
 
 // Curated comprehensive dynamic subject knowledge bank for reliable fallback generation
 const SUBJECT_KNOWLEDGE_BANK: Record<string, QuizQuestion[]> = {
