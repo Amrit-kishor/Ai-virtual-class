@@ -29,6 +29,8 @@ import { AttendanceModal } from '@/components/classroom/AttendanceModal';
 import { AISummaryModal } from '@/components/classroom/AISummaryModal';
 import { InviteMembersModal } from '@/components/classroom/InviteMembersModal';
 import { MultiUploadZone } from '@/components/classroom/MultiUploadZone';
+import { BackgroundEffectsModal } from '@/components/classroom/BackgroundEffectsModal';
+import { BackgroundMode, VideoBackgroundProcessor } from '@/lib/videoBackgroundProcessor';
 
 // Icons
 import {
@@ -105,6 +107,14 @@ export default function ClassroomPage() {
   const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
   const audioDetectorsRef = useRef<Map<string, () => void>>(new Map());
+
+  // Virtual Background & Video Segmentation Processor
+  const [backgroundMode, setBackgroundMode] = useState<BackgroundMode>('original');
+  const [virtualImage, setVirtualImage] = useState<string | null>(null);
+  const [showBackgroundModal, setShowBackgroundModal] = useState(false);
+  const [isBackgroundLoading, setIsBackgroundLoading] = useState(false);
+  const backgroundProcessorRef = useRef<VideoBackgroundProcessor | null>(null);
+  const rawCameraStreamRef = useRef<MediaStream | null>(null);
 
   // Content States synced via Sockets
   const [whiteboardElements, setWhiteboardElements] = useState<WhiteboardElement[]>([]);
@@ -227,33 +237,53 @@ export default function ClassroomPage() {
   const requestMediaPermissions = async (): Promise<MediaStream | null> => {
     try {
       setMediaError(null);
-      const stream = await getLiveUserMediaStream({ video: true, audio: true });
-      setLocalStream(stream);
-      localStreamRef.current = stream;
+      const rawStream = await getLiveUserMediaStream({ video: true, audio: true });
+      rawCameraStreamRef.current = rawStream;
+
+      let streamToUse = rawStream;
+
+      if (backgroundMode !== 'original' && backgroundProcessorRef.current) {
+        try {
+          await backgroundProcessorRef.current.start(rawStream);
+          const processedTrack = backgroundProcessorRef.current.getProcessedTrack();
+          const audioTrack = rawStream.getAudioTracks()[0];
+          if (processedTrack) {
+            streamToUse = new MediaStream([
+              processedTrack,
+              ...(audioTrack ? [audioTrack] : [])
+            ]);
+          }
+        } catch (e) {
+          console.warn('[Background Processing Error in getUserMedia]', e);
+        }
+      }
+
+      setLocalStream(streamToUse);
+      localStreamRef.current = streamToUse;
 
       // Attach audio detector for self
       const selfId = user.id;
       if (audioDetectorsRef.current.has(selfId)) {
         audioDetectorsRef.current.get(selfId)?.();
       }
-      const cleanupSelf = createAudioActivityDetector(stream, (isSpeaking) => {
+      const cleanupSelf = createAudioActivityDetector(rawStream, (isSpeaking) => {
         setSpeakingStates((prev) => ({ ...prev, [selfId]: isSpeaking }));
       });
       audioDetectorsRef.current.set(selfId, cleanupSelf);
 
       // Add/Replace tracks in all active peer connections
       peerConnectionsRef.current.forEach((pc) => {
-        stream.getTracks().forEach((track) => {
+        streamToUse.getTracks().forEach((track) => {
           const sender = pc.getSenders().find((s) => s.track?.kind === track.kind);
           if (sender) {
             sender.replaceTrack(track).catch(console.warn);
           } else {
-            pc.addTrack(track, stream);
+            pc.addTrack(track, streamToUse);
           }
         });
       });
 
-      return stream;
+      return streamToUse;
     } catch (err: unknown) {
       console.warn('Media stream fallback:', err);
       return null;
@@ -545,6 +575,9 @@ export default function ClassroomPage() {
       peerConnectionsRef.current.clear();
       pendingCandidatesRef.current.clear();
 
+      // Stop background segmentation processor
+      backgroundProcessorRef.current?.stop();
+
       // Clean up all audio detectors
       audioDetectorsRef.current.forEach((cleanup) => cleanup());
       audioDetectorsRef.current.clear();
@@ -579,27 +612,82 @@ export default function ClassroomPage() {
 
         if (activeLiveTrack) {
           activeLiveTrack.enabled = !nextVideoOff;
-        } else if (!nextVideoOff) {
-          // If track ended or not found, acquire fresh camera stream & replace track in active peer connections
-          const newStream = await requestMediaPermissions();
-          if (newStream) {
-            const newVideoTrack = newStream.getVideoTracks()[0];
-            if (newVideoTrack) {
-              newVideoTrack.enabled = true;
-              peerConnectionsRef.current.forEach((pc) => {
-                const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
-                if (sender) {
-                  sender.replaceTrack(newVideoTrack).catch(console.warn);
-                }
-              });
-            }
-          }
+        }
+
+        if (rawCameraStreamRef.current) {
+          rawCameraStreamRef.current.getVideoTracks().forEach((t) => {
+            t.enabled = !nextVideoOff;
+          });
         }
       } else if (!nextVideoOff) {
         requestMediaPermissions();
       }
 
       socket.emit('toggle-media', { roomCode, type: 'video', value: nextVideoOff });
+    }
+  };
+
+  const handleSelectBackgroundMode = async (mode: BackgroundMode, virtualImageSrc?: string | null) => {
+    setBackgroundMode(mode);
+    if (virtualImageSrc) setVirtualImage(virtualImageSrc);
+
+    const rawCamera = rawCameraStreamRef.current;
+    if (!rawCamera) return;
+
+    if (!backgroundProcessorRef.current) {
+      backgroundProcessorRef.current = new VideoBackgroundProcessor();
+    }
+
+    const processor = backgroundProcessorRef.current;
+    processor.setMode(mode, virtualImageSrc);
+
+    if (mode === 'original') {
+      const originalVideoTrack = rawCamera.getVideoTracks()[0];
+      if (originalVideoTrack) {
+        originalVideoTrack.enabled = !isVideoOff;
+        peerConnectionsRef.current.forEach((pc) => {
+          const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
+          if (sender) {
+            sender.replaceTrack(originalVideoTrack).catch(console.warn);
+          }
+        });
+
+        const audioTrack = rawCamera.getAudioTracks()[0];
+        const newLocalStream = new MediaStream([
+          originalVideoTrack,
+          ...(audioTrack ? [audioTrack] : [])
+        ]);
+        localStreamRef.current = newLocalStream;
+        setLocalStream(newLocalStream);
+      }
+    } else {
+      setIsBackgroundLoading(true);
+      try {
+        await processor.start(rawCamera);
+        const processedVideoTrack = processor.getProcessedTrack();
+
+        if (processedVideoTrack) {
+          processedVideoTrack.enabled = !isVideoOff;
+          peerConnectionsRef.current.forEach((pc) => {
+            const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
+            if (sender) {
+              sender.replaceTrack(processedVideoTrack).catch(console.warn);
+            }
+          });
+
+          const audioTrack = rawCamera.getAudioTracks()[0];
+          const newLocalStream = new MediaStream([
+            processedVideoTrack,
+            ...(audioTrack ? [audioTrack] : [])
+          ]);
+          localStreamRef.current = newLocalStream;
+          setLocalStream(newLocalStream);
+        }
+      } catch (err) {
+        console.warn('[Background Processing Error]', err);
+      } finally {
+        setIsBackgroundLoading(false);
+      }
     }
   };
 
@@ -610,7 +698,10 @@ export default function ClassroomPage() {
       socket.emit('toggle-media', { roomCode, type: 'screen', value: false });
 
       // Revert video track in all active peer connections back to camera
-      const cameraTrack = localStreamRef.current?.getVideoTracks()[0] || null;
+      const cameraTrack = (backgroundMode !== 'original' && backgroundProcessorRef.current)
+        ? backgroundProcessorRef.current.getProcessedTrack()
+        : (localStreamRef.current?.getVideoTracks()[0] || rawCameraStreamRef.current?.getVideoTracks()[0] || null);
+
       if (cameraTrack) {
         peerConnectionsRef.current.forEach((pc) => {
           const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
@@ -642,7 +733,9 @@ export default function ClassroomPage() {
           screenTrack.onended = () => {
             setIsScreenSharing(false);
             socket.emit('toggle-media', { roomCode, type: 'screen', value: false });
-            const camTrack = localStreamRef.current?.getVideoTracks()[0] || null;
+            const camTrack = (backgroundMode !== 'original' && backgroundProcessorRef.current)
+              ? backgroundProcessorRef.current.getProcessedTrack()
+              : (localStreamRef.current?.getVideoTracks()[0] || rawCameraStreamRef.current?.getVideoTracks()[0] || null);
             if (camTrack) {
               peerConnectionsRef.current.forEach((pc) => {
                 const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
@@ -1224,6 +1317,22 @@ export default function ClassroomPage() {
             <span>{isVideoOff ? 'Start Video' : 'Stop Video'}</span>
           </button>
 
+          {/* Visual Background Effects (Google Meet style) */}
+          <button
+            onClick={() => setShowBackgroundModal(true)}
+            className={`px-3.5 py-2.5 rounded-2xl font-bold text-xs flex items-center gap-1.5 transition shadow-lg border ${
+              backgroundMode !== 'original'
+                ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white border-indigo-400/50 shadow-indigo-600/30 ring-1 ring-indigo-400'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-white/10'
+            }`}
+            title="Visual Background Effects (Blur, Remove, Virtual Backdrop)"
+          >
+            <Sparkles size={16} className={backgroundMode !== 'original' ? 'text-amber-300 animate-pulse' : 'text-slate-400'} />
+            <span className="hidden md:inline">
+              {backgroundMode === 'blur' ? 'Blur BG' : backgroundMode === 'remove' ? 'Studio BG' : backgroundMode === 'virtual' ? 'Virtual BG' : 'Background'}
+            </span>
+          </button>
+
           {/* Vertical Separator */}
           <div className="w-px h-8 bg-white/10 mx-1"></div>
 
@@ -1311,6 +1420,16 @@ export default function ClassroomPage() {
       {activeQuiz && <QuizModal quiz={activeQuiz} onClose={() => setActiveQuiz(null)} />}
       {showAttendance && <AttendanceModal participants={participants} onClose={() => setShowAttendance(false)} />}
       {showSummary && summaryData && <AISummaryModal summaryData={summaryData} onClose={() => setShowSummary(false)} />}
+      
+      {/* Visual Background Effects Modal */}
+      <BackgroundEffectsModal
+        isOpen={showBackgroundModal}
+        onClose={() => setShowBackgroundModal(false)}
+        currentMode={backgroundMode}
+        currentVirtualImage={virtualImage}
+        onSelectMode={handleSelectBackgroundMode}
+        isLoading={isBackgroundLoading}
+      />
     </div>
   );
 }
