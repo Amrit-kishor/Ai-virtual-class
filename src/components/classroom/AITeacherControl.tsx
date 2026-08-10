@@ -68,6 +68,7 @@ export const AITeacherControl: React.FC<AITeacherControlProps> = ({
   const [autoVoiceOnSwitch, setAutoVoiceOnSwitch] = useState(false);
   const [adaptationError, setAdaptationError] = useState<string | null>(null);
   const [lastFailedAction, setLastFailedAction] = useState<string | null>(null);
+  const [ttsError, setTtsError] = useState<string | null>(null);
 
   // File Upload State
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
@@ -238,8 +239,13 @@ export const AITeacherControl: React.FC<AITeacherControlProps> = ({
   // Step Adaptation Actions (Explains & Automatically Speaks)
   // ----------------------------------------------------------------
   const handleAdapt = async (action: string, customText?: string) => {
+    // Duplicate-request guard: do not fire while another adaptation is in flight
+    if (isAdapting) return;
+
     const queryToSend = (customText !== undefined ? customText : (followUpQuestion || liveTranscript)).trim();
     if (action === 'custom_question' && !queryToSend) return;
+
+    const savedQuestion = followUpQuestion; // preserve in case of failure
 
     setIsAdapting(true);
     setActiveAdaptation(action);
@@ -270,20 +276,25 @@ export const AITeacherControl: React.FC<AITeacherControlProps> = ({
 
       const data = await res.json();
       if (data.adapted) {
-        setAdaptedContent(data.adapted.text || null);
-        setAdaptedAnalogy(data.adapted.analogy || null);
-        setAdaptedExample(data.adapted.example || null);
+          setAdaptedContent(data.adapted.text || null);
+          setAdaptedAnalogy(data.adapted.analogy || null);
+          setAdaptedExample(data.adapted.example || null);
+          setTtsError(null);
 
-        // Automatically speak the adapted explanation aloud
-        const textToSpeak = `${data.adapted.text} ${data.adapted.analogy ? `Analogy: ${data.adapted.analogy}` : ''}`;
-        speakText(textToSpeak, {
-          speed: audioSpeed,
-          voice: voiceName,
-          gender: voiceGender,
-          onSentenceChange: (idx) => {
-            setActiveSentenceIndex(idx >= 0 ? idx : null);
-          },
-        });
+          // Automatically speak the adapted explanation — fall back to text if TTS fails
+          const textToSpeak = `${data.adapted.text} ${data.adapted.analogy ? `Analogy: ${data.adapted.analogy}` : ''}`;
+          try {
+            speakText(textToSpeak, {
+              speed: audioSpeed,
+              voice: voiceName,
+              gender: voiceGender,
+              onSentenceChange: (idx) => {
+                setActiveSentenceIndex(idx >= 0 ? idx : null);
+              },
+            });
+          } catch {
+            setTtsError('Voice playback unavailable. The text response is shown above.');
+          }
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
@@ -292,9 +303,13 @@ export const AITeacherControl: React.FC<AITeacherControlProps> = ({
       }
       const msg = err instanceof Error ? err.message : 'AI explanation failed.';
       setAdaptationError(msg);
+      // Restore the user's question so they can retry without re-typing
+      if (action === 'custom_question') setFollowUpQuestion(savedQuestion);
     } finally {
       setIsAdapting(false);
-      setFollowUpQuestion('');
+      // Note: followUpQuestion is intentionally NOT cleared here on error paths \u2014
+      // it was already restored in the catch block so the user can retry.
+      // On success it was already cleared at the start of handleAdapt (line above setIsAdapting).
       abortControllerRef.current = null;
     }
   };
@@ -438,6 +453,24 @@ export const AITeacherControl: React.FC<AITeacherControlProps> = ({
               <RefreshCw size={10} /> Retry
             </button>
           )}
+        </div>
+      )}
+
+      {/* AI Teacher Thinking Banner — shown while request is in flight */}
+      {isAdapting && (
+        <div className="my-1.5 px-3 py-2 bg-violet-950/60 border border-violet-500/30 rounded-xl flex items-center gap-2 text-xs text-violet-200 animate-pulse">
+          <Sparkles size={14} className="text-violet-400 shrink-0" />
+          <span className="font-semibold">🧠 AI Teacher is thinking...</span>
+          <span className="text-violet-400 text-[10px] ml-auto">Please wait</span>
+        </div>
+      )}
+
+      {/* TTS Error Notice — voice failed but text is still visible */}
+      {ttsError && !isAdapting && (
+        <div className="my-1 px-3 py-1.5 bg-amber-950/40 border border-amber-500/20 rounded-xl flex items-center gap-2 text-[11px] text-amber-300">
+          <Headphones size={12} className="shrink-0" />
+          <span>{ttsError}</span>
+          <button onClick={() => setTtsError(null)} className="ml-auto text-amber-500 hover:text-amber-300 font-bold text-[10px]">✕</button>
         </div>
       )}
 
