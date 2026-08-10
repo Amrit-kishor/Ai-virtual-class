@@ -353,12 +353,15 @@ export default function ClassroomPage() {
       if (data.participants && data.participants.length > 0) {
         setParticipants(data.participants);
 
-        // Initiate WebRTC connection to every existing participant
-        data.participants.forEach((p: Participant) => {
-          if (p.socketId && p.socketId !== socket.id && !p.socketId.startsWith('self_')) {
-            createPeerConnection(p.socketId, true);
-          }
-        });
+        // NOTE: We deliberately do NOT initiate offers to existing participants here.
+        // Each existing participant will initiate an offer to us via their own
+        // 'user-joined' handler below. If both sides initiated simultaneously
+        // (offer collision / "glare"), each side's RTCPeerConnection would end up
+        // in 'have-local-offer' state when the other side's offer arrives,
+        // producing an invalid signaling state and a failed connection.
+        // Keeping offer initiation one-directional (existing -> new) avoids this
+        // entirely. Our side's peer connections are created reactively inside
+        // the 'webrtc-offer' handler once each existing participant's offer arrives.
       }
       setWhiteboardElements(data.whiteboardElements || []);
       setChatMessages(data.chatMessages || []);

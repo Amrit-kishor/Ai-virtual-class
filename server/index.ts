@@ -1,12 +1,13 @@
 import express from 'express';
 import http from 'http';
+import os from 'os';
 import { Server, Socket } from 'socket.io';
 import next from 'next';
 import { parse } from 'url';
 import jwt from 'jsonwebtoken';
 import { env } from './env';
 import { logger } from './logger';
-import { corsMiddleware, helmetMiddleware, apiRateLimiter, authRateLimiter, socketRateLimiter } from './security';
+import { corsMiddleware, corsOptions, helmetMiddleware, apiRateLimiter, authRateLimiter, socketRateLimiter } from './security';
 import { errorHandler, AppError } from './errorHandler';
 import { roomStore } from './roomStore';
 import { prisma } from '../src/lib/prisma';
@@ -29,6 +30,21 @@ import {
   WebRTCAnswerSchema,
   WebRTCIceCandidateSchema,
 } from './validators';
+
+// Best-effort discovery of the machine's LAN IPv4 address, purely for the
+// startup log message that tells the developer what URL to use from a phone
+// or other device on the same network.
+function getLanIpAddress(): string | null {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name] || []) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return null;
+}
 
 const dev = env.NODE_ENV !== 'production';
 const app = next({ dev });
@@ -59,10 +75,10 @@ app.prepare().then(() => {
   // 1. Secure Socket.IO Setup
   const io = new Server(server, {
     cors: {
-      origin: (origin, callback) => {
-        if (!origin || dev) return callback(null, true);
-        callback(null, true);
-      },
+      // Reuse the same validated origin allowlist as the REST API instead of
+      // blindly accepting every origin, so arbitrary websites cannot connect
+      // to the classroom socket in production.
+      origin: corsOptions.origin,
       credentials: true,
       methods: ['GET', 'POST'],
     },
@@ -492,58 +508,69 @@ app.prepare().then(() => {
     // WebRTC Peer-to-Peer Signaling Handlers
     // ==========================================
 
+    // Shared authorization guard for all WebRTC signaling events:
+    // both the sender AND the target must be current participants of the SAME room.
+    // Prevents a client from targeting an arbitrary socket in another room.
+    const authorizeSignaling = (roomCode: string, targetSocketId: string) => {
+      const room = roomStore.getRoom(roomCode);
+      if (!room) return null;
+      if (socket.data.roomCode !== roomCode) return null; // sender must actually be joined to this room
+      if (!room.participants.has(socket.id)) return null;
+      if (!room.participants.has(targetSocketId)) return null; // target must be in the SAME room
+      const targetSocket = io.sockets.sockets.get(targetSocketId);
+      if (!targetSocket) return null;
+      return targetSocket;
+    };
+
     // Forward WebRTC SDP Offer to Target Peer
     socket.on('webrtc-offer', (rawPayload: unknown) => {
+      if (socketRateLimiter.isRateLimited(socket.id, 'webrtc-offer', 20)) return;
+
       const parseResult = WebRTCOfferSchema.safeParse(rawPayload);
       if (!parseResult.success) return;
 
       const { roomCode, targetSocketId, offer } = parseResult.data;
-      const room = roomStore.getRoom(roomCode);
-      if (!room || !room.participants.has(socket.id)) return;
+      const targetSocket = authorizeSignaling(roomCode, targetSocketId);
+      if (!targetSocket) return;
 
-      const targetSocket = io.sockets.sockets.get(targetSocketId);
-      if (targetSocket) {
-        targetSocket.emit('webrtc-offer', {
-          senderSocketId: socket.id,
-          offer,
-        });
-      }
+      targetSocket.emit('webrtc-offer', {
+        senderSocketId: socket.id,
+        offer,
+      });
     });
 
     // Forward WebRTC SDP Answer to Target Peer
     socket.on('webrtc-answer', (rawPayload: unknown) => {
+      if (socketRateLimiter.isRateLimited(socket.id, 'webrtc-answer', 20)) return;
+
       const parseResult = WebRTCAnswerSchema.safeParse(rawPayload);
       if (!parseResult.success) return;
 
       const { roomCode, targetSocketId, answer } = parseResult.data;
-      const room = roomStore.getRoom(roomCode);
-      if (!room || !room.participants.has(socket.id)) return;
+      const targetSocket = authorizeSignaling(roomCode, targetSocketId);
+      if (!targetSocket) return;
 
-      const targetSocket = io.sockets.sockets.get(targetSocketId);
-      if (targetSocket) {
-        targetSocket.emit('webrtc-answer', {
-          senderSocketId: socket.id,
-          answer,
-        });
-      }
+      targetSocket.emit('webrtc-answer', {
+        senderSocketId: socket.id,
+        answer,
+      });
     });
 
     // Forward WebRTC ICE Candidate to Target Peer
     socket.on('webrtc-ice-candidate', (rawPayload: unknown) => {
+      if (socketRateLimiter.isRateLimited(socket.id, 'webrtc-ice-candidate', 60)) return;
+
       const parseResult = WebRTCIceCandidateSchema.safeParse(rawPayload);
       if (!parseResult.success) return;
 
       const { roomCode, targetSocketId, candidate } = parseResult.data;
-      const room = roomStore.getRoom(roomCode);
-      if (!room || !room.participants.has(socket.id)) return;
+      const targetSocket = authorizeSignaling(roomCode, targetSocketId);
+      if (!targetSocket) return;
 
-      const targetSocket = io.sockets.sockets.get(targetSocketId);
-      if (targetSocket) {
-        targetSocket.emit('webrtc-ice-candidate', {
-          senderSocketId: socket.id,
-          candidate,
-        });
-      }
+      targetSocket.emit('webrtc-ice-candidate', {
+        senderSocketId: socket.id,
+        candidate,
+      });
     });
 
     // Disconnect Handler
@@ -590,11 +617,22 @@ app.prepare().then(() => {
   };
 
   findOpenPort(PORT).then((actualPort) => {
-    server.listen(actualPort, () => {
+    // Bind explicitly to 0.0.0.0 so the server is reachable from other devices
+    // on the same LAN (e.g. testing the classroom from a phone), not just localhost.
+    server.listen(actualPort, '0.0.0.0', () => {
+      const lanIp = getLanIpAddress();
       logger.info(
         { port: actualPort, env: env.NODE_ENV },
-        `🚀 AI Virtual Classroom Production Server running at http://localhost:${actualPort}`
+        `🚀 AI Virtual Classroom Production Server running`
       );
+      // eslint-disable-next-line no-console
+      console.log(`\n  Local:    http://localhost:${actualPort}`);
+      if (lanIp) {
+        // eslint-disable-next-line no-console
+        console.log(`  Network:  http://${lanIp}:${actualPort}`);
+        // eslint-disable-next-line no-console
+        console.log(`\n  For mobile/LAN testing, set NEXT_PUBLIC_SOCKET_URL=http://${lanIp}:${actualPort} in .env\n`);
+      }
     });
   });
 });

@@ -106,6 +106,11 @@ export const ParticipantCard: React.FC<ParticipantCardProps> = ({
             isVideoOff || !stream ? 'opacity-0 pointer-events-none' : 'opacity-100'
           } ${isSelf ? 'transform -scale-x-100' : ''}`}
         />
+        {participant.isHandRaised && (
+            <div className="absolute top-2 right-2 z-20 flex h-9 w-9 items-center justify-center rounded-full bg-black/60 shadow-md">
+              <span className="text-lg">✋</span>
+            </div>
+          )}
       </div>
 
       {/* Avatar Placeholder Overlay (Visible when camera is OFF or stream missing) */}
@@ -183,12 +188,6 @@ export const ParticipantCard: React.FC<ParticipantCardProps> = ({
               </button>
             )}
           </>
-        )}
-
-        {participant.isHandRaised && (
-          <span className="bg-amber-500 text-slate-950 p-1.5 rounded-full animate-bounce shadow-lg" title="Hand Raised">
-            <Hand size={13} />
-          </span>
         )}
 
         {onSpotlight && (
