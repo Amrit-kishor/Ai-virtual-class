@@ -35,7 +35,7 @@ export const corsMiddleware = cors(corsOptions);
 
 // 2. Helmet Security Headers Configuration
 export const helmetMiddleware = helmet({
-  contentSecurityPolicy: process.env.NODE_ENV === 'production',
+  contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
 });
 

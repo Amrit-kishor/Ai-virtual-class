@@ -2,6 +2,7 @@ import express from 'express';
 import http from 'http';
 import { Server, Socket } from 'socket.io';
 import next from 'next';
+import { parse } from 'url';
 import jwt from 'jsonwebtoken';
 import { env } from './env';
 import { logger } from './logger';
@@ -439,7 +440,8 @@ app.prepare().then(() => {
     if (req.path.startsWith('/socket.io')) {
       return;
     }
-    return handle(req, res);
+    const parsedUrl = parse(req.url, true);
+    return handle(req, res, parsedUrl);
   });
 
   // Centralized Error Middleware
