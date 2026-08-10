@@ -1,8 +1,11 @@
 'use client';
 
-import React, { useRef, useEffect } from 'react';
+// src/components/classroom/ParticipantCard.tsx
+// Google Meet style Video Participant Tile: Remote Audio playback, Unmuted remote streams, Speaking indicator, and Autoplay unlock
+
+import React, { useState, useRef, useEffect } from 'react';
 import { Participant } from '@/types';
-import { Mic, MicOff, Video, VideoOff, Hand, Star, UserX, VolumeX, Pin } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, Hand, Star, UserX, VolumeX, Volume2, Activity } from 'lucide-react';
 
 interface ParticipantCardProps {
   participant: Participant;
@@ -11,6 +14,7 @@ interface ParticipantCardProps {
   stream?: MediaStream | null;
   isMutedOverride?: boolean;
   isVideoOffOverride?: boolean;
+  isSpeaking?: boolean;
   onSpotlight?: (socketId: string) => void;
   onKickParticipant?: (targetSocketId: string, targetUserId: string, targetName: string) => void;
   onRemoteMute?: (targetSocketId: string) => void;
@@ -23,50 +27,110 @@ export const ParticipantCard: React.FC<ParticipantCardProps> = ({
   stream,
   isMutedOverride,
   isVideoOffOverride,
+  isSpeaking = false,
   onSpotlight,
   onKickParticipant,
   onRemoteMute,
 }) => {
   const isMuted = isSelf && isMutedOverride !== undefined ? isMutedOverride : participant.isMuted;
   const isVideoOff = isSelf && isVideoOffOverride !== undefined ? isVideoOffOverride : participant.isVideoOff;
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Attach MediaStream to Video Element and Handle Audio Autoplay
+  useEffect(() => {
+    const videoNode = videoRef.current;
+    if (!videoNode || !stream) return;
+
+    if (videoNode.srcObject !== stream) {
+      videoNode.srcObject = stream;
+    }
+
+    videoNode
+      .play()
+      .then(() => {
+        setAutoplayBlocked(false);
+      })
+      .catch((err) => {
+        if (!isSelf && err.name === 'NotAllowedError') {
+          console.warn('[WebRTC Autoplay Blocked] Click to enable audio for:', participant.name);
+          setAutoplayBlocked(true);
+        }
+      });
+  }, [stream, isSelf, participant.name]);
+
+  const handleUnlockAudio = () => {
+    if (videoRef.current) {
+      videoRef.current
+        .play()
+        .then(() => setAutoplayBlocked(false))
+        .catch(console.error);
+    }
+  };
 
   return (
     <div
-      className={`relative rounded-2xl overflow-hidden bg-slate-900 border transition-all duration-300 flex flex-col items-center justify-center ${
-        participant.isSpotlighted
+      className={`relative rounded-2xl overflow-hidden bg-slate-900 border transition-all duration-200 flex flex-col items-center justify-center ${
+        isSpeaking
+          ? 'ring-2 ring-emerald-400 shadow-xl shadow-emerald-500/20 border-emerald-500/50'
+          : participant.isSpotlighted
           ? 'ring-2 ring-indigo-500 shadow-xl shadow-indigo-500/20 border-indigo-500/50'
           : 'border-white/10 shadow-lg'
       }`}
       style={{ minHeight: '220px' }}
     >
-      {/* Video Stream Container or Zoom/Meet Minimalist Avatar */}
+      {/* Video Element Container or Avatar Placeholder */}
       {isVideoOff || !stream ? (
         <div className="flex flex-col items-center justify-center p-6 text-center w-full h-full bg-slate-950/80">
-          <div className="w-20 h-20 rounded-full bg-gradient-to-br from-slate-800 to-indigo-950 border border-white/10 flex items-center justify-center text-indigo-300 font-bold text-2xl mb-2 shadow-inner">
+          <div
+            className={`w-20 h-20 rounded-full flex items-center justify-center text-indigo-300 font-bold text-2xl mb-2 shadow-inner transition-all ${
+              isSpeaking
+                ? 'bg-gradient-to-br from-emerald-900 to-indigo-950 border-2 border-emerald-400 scale-105'
+                : 'bg-gradient-to-br from-slate-800 to-indigo-950 border border-white/10'
+            }`}
+          >
             {participant.name.slice(0, 2).toUpperCase()}
           </div>
-          <span className="text-xs text-slate-400 font-medium">{participant.name}</span>
+          <span className="text-xs text-slate-300 font-medium">{participant.name}</span>
+          <span className="text-[10px] text-slate-500 font-mono mt-0.5">Camera Off</span>
+
+          {/* Hidden audio element so remote audio still plays when video is off */}
+          {!isSelf && stream && stream.getAudioTracks().length > 0 && (
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted={false}
+              className="hidden"
+            />
+          )}
         </div>
       ) : (
         <div className="w-full h-full bg-slate-950 relative flex items-center justify-center overflow-hidden min-h-[220px]">
           <video
-            ref={(node) => {
-              if (node && stream) {
-                if (node.srcObject !== stream) {
-                  node.srcObject = stream;
-                }
-                node.play().catch(() => {});
-              }
-            }}
+            ref={videoRef}
             autoPlay
             playsInline
-            muted={isSelf}
-            className="w-full h-full object-cover transform -scale-x-100"
+            muted={isSelf} // CRITICAL: Local is muted to prevent echo, Remote is UNMUTED to play audio!
+            className={`w-full h-full object-cover ${isSelf ? 'transform -scale-x-100' : ''}`}
           />
         </div>
       )}
 
-      {/* Top Left Badges: Teacher Role & User Name */}
+      {/* Autoplay Audio Unlock Overlay */}
+      {autoplayBlocked && !isSelf && (
+        <button
+          onClick={handleUnlockAudio}
+          className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-30 flex flex-col items-center justify-center gap-2 text-white font-bold p-4 text-center cursor-pointer hover:bg-slate-950/90 transition"
+        >
+          <div className="p-3 bg-amber-500 text-slate-950 rounded-full animate-bounce shadow-lg">
+            <Volume2 size={20} />
+          </div>
+          <span className="text-xs text-amber-300">Click to Enable Audio for {participant.name}</span>
+        </button>
+      )}
+
+      {/* Top Left Badges: Teacher Role, User Name & Speaking Indicator */}
       <div className="absolute top-3 left-3 flex items-center gap-1.5 z-20">
         <div className="flex items-center gap-1.5 bg-slate-950/85 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 text-xs shadow-md">
           {participant.role === 'TEACHER' && (
@@ -74,15 +138,20 @@ export const ParticipantCard: React.FC<ParticipantCardProps> = ({
               <Star size={10} className="fill-amber-300" /> TEACHER
             </span>
           )}
-          <span className="font-semibold text-slate-100 truncate max-w-[130px]">
+          <span className="font-semibold text-slate-100 truncate max-w-[120px]">
             {participant.name} {isSelf && '(You)'}
           </span>
+          {isSpeaking && (
+            <span className="bg-emerald-500/20 text-emerald-300 text-[10px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 border border-emerald-500/30">
+              <Activity size={10} className="text-emerald-400 animate-pulse" /> Speaking
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Top Right Quick Actions: Spotlight, Remote Mute, Kick */}
+      {/* Top Right Quick Actions: Hand, Spotlight, Remote Mute, Kick */}
       <div className="absolute top-3 right-3 flex items-center gap-1.5 z-20">
-        {/* Teacher Actions on Student Cards */}
+        {/* Teacher Actions on Remote Participants */}
         {isCurrentUserTeacher && !isSelf && (
           <>
             {onRemoteMute && !isMuted && (
@@ -118,37 +187,40 @@ export const ParticipantCard: React.FC<ParticipantCardProps> = ({
             className={`p-1.5 rounded-lg border transition shadow text-xs ${
               participant.isSpotlighted
                 ? 'bg-indigo-600 text-white border-indigo-500'
-                : 'bg-slate-950/80 text-slate-300 border-white/10 hover:bg-slate-800'
+                : 'bg-slate-950/80 text-slate-400 border-white/10 hover:text-white'
             }`}
-            title="Pin / Spotlight Participant"
+            title={participant.isSpotlighted ? 'Remove Spotlight' : 'Spotlight Participant'}
           >
-            <Pin size={12} />
+            <Star size={13} className={participant.isSpotlighted ? 'fill-white' : ''} />
           </button>
         )}
       </div>
 
-      {/* Bottom Left Passive Status Badges (Zoom / Google Meet Style) */}
-      <div className="absolute bottom-3 left-3 flex items-center gap-1.5 z-20">
-        {/* Passive Mic Status Badge */}
-        <div
-          className={`flex items-center justify-center p-1.5 rounded-lg backdrop-blur-md shadow-md border ${
-            isMuted
-              ? 'bg-red-500/80 text-white border-red-400/50'
-              : 'bg-slate-950/70 text-emerald-400 border-white/10'
-          }`}
-          title={isMuted ? 'Microphone is Muted' : 'Microphone is Active'}
-        >
-          {isMuted ? <MicOff size={13} /> : <Mic size={13} />}
+      {/* Bottom Status Bar: Mic State & Video State */}
+      <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between z-20 pointer-events-none">
+        <div className="flex items-center gap-1.5">
+          <div
+            className={`p-1.5 rounded-lg text-xs backdrop-blur-md shadow-md ${
+              isMuted ? 'bg-red-500/80 text-white' : 'bg-slate-950/80 text-emerald-400 border border-white/10'
+            }`}
+            title={isMuted ? 'Microphone Muted' : 'Microphone Active'}
+          >
+            {isMuted ? <MicOff size={13} /> : <Mic size={13} />}
+          </div>
+          <div
+            className={`p-1.5 rounded-lg text-xs backdrop-blur-md shadow-md ${
+              isVideoOff ? 'bg-red-500/80 text-white' : 'bg-slate-950/80 text-emerald-400 border border-white/10'
+            }`}
+            title={isVideoOff ? 'Camera Off' : 'Camera Active'}
+          >
+            {isVideoOff ? <VideoOff size={13} /> : <Video size={13} />}
+          </div>
         </div>
 
-        {/* Passive Camera Status Badge */}
-        {isVideoOff && (
-          <div
-            className="flex items-center justify-center p-1.5 rounded-lg backdrop-blur-md shadow-md border bg-red-500/80 text-white border-red-400/50"
-            title="Camera is Off"
-          >
-            <VideoOff size={13} />
-          </div>
+        {!isSelf && stream && stream.getAudioTracks().length > 0 && (
+          <span className="text-[10px] text-emerald-400/90 font-mono bg-slate-950/80 px-2 py-0.5 rounded border border-white/10 backdrop-blur-md">
+            HD Audio
+          </span>
         )}
       </div>
     </div>

@@ -20,6 +20,9 @@ import {
   NotesUpdatePayloadSchema,
   KickParticipantPayloadSchema,
   RemoteMutePayloadSchema,
+  WebRTCOfferSchema,
+  WebRTCAnswerSchema,
+  WebRTCIceCandidateSchema,
 } from './validators';
 
 const dev = env.NODE_ENV !== 'production';
@@ -188,7 +191,7 @@ app.prepare().then(() => {
       });
 
       // Broadcast new participant join to room
-      socket.to(roomCode).emit('user-joined', participant);
+      socket.to(roomCode).emit('user-joined', { participant });
       io.to(roomCode).emit('participants-list-updated', Array.from(room.participants.values()));
 
       logger.info({ roomCode, userId, name, role }, 'User joined room successfully');
@@ -341,6 +344,64 @@ app.prepare().then(() => {
 
       room.activeQuiz = quiz;
       io.to(roomCode).emit('active-quiz-broadcast', quiz);
+    });
+
+    // ==========================================
+    // WebRTC Peer-to-Peer Signaling Handlers
+    // ==========================================
+
+    // Forward WebRTC SDP Offer to Target Peer
+    socket.on('webrtc-offer', (rawPayload: unknown) => {
+      const parseResult = WebRTCOfferSchema.safeParse(rawPayload);
+      if (!parseResult.success) return;
+
+      const { roomCode, targetSocketId, offer } = parseResult.data;
+      const room = roomStore.getRoom(roomCode);
+      if (!room || !room.participants.has(socket.id)) return;
+
+      const targetSocket = io.sockets.sockets.get(targetSocketId);
+      if (targetSocket) {
+        targetSocket.emit('webrtc-offer', {
+          senderSocketId: socket.id,
+          offer,
+        });
+      }
+    });
+
+    // Forward WebRTC SDP Answer to Target Peer
+    socket.on('webrtc-answer', (rawPayload: unknown) => {
+      const parseResult = WebRTCAnswerSchema.safeParse(rawPayload);
+      if (!parseResult.success) return;
+
+      const { roomCode, targetSocketId, answer } = parseResult.data;
+      const room = roomStore.getRoom(roomCode);
+      if (!room || !room.participants.has(socket.id)) return;
+
+      const targetSocket = io.sockets.sockets.get(targetSocketId);
+      if (targetSocket) {
+        targetSocket.emit('webrtc-answer', {
+          senderSocketId: socket.id,
+          answer,
+        });
+      }
+    });
+
+    // Forward WebRTC ICE Candidate to Target Peer
+    socket.on('webrtc-ice-candidate', (rawPayload: unknown) => {
+      const parseResult = WebRTCIceCandidateSchema.safeParse(rawPayload);
+      if (!parseResult.success) return;
+
+      const { roomCode, targetSocketId, candidate } = parseResult.data;
+      const room = roomStore.getRoom(roomCode);
+      if (!room || !room.participants.has(socket.id)) return;
+
+      const targetSocket = io.sockets.sockets.get(targetSocketId);
+      if (targetSocket) {
+        targetSocket.emit('webrtc-ice-candidate', {
+          senderSocketId: socket.id,
+          candidate,
+        });
+      }
     });
 
     // Disconnect Handler

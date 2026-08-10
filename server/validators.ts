@@ -67,3 +67,28 @@ export const RemoteMutePayloadSchema = z.object({
   roomCode: z.string().min(1),
   targetSocketId: z.string().min(1),
 });
+
+// WebRTC Signaling Validators
+export const WebRTCOfferSchema = z.object({
+  roomCode: z.string().min(1),
+  targetSocketId: z.string().min(1),
+  offer: z.object({
+    type: z.string(),
+    sdp: z.string(),
+  }),
+});
+
+export const WebRTCAnswerSchema = z.object({
+  roomCode: z.string().min(1),
+  targetSocketId: z.string().min(1),
+  answer: z.object({
+    type: z.string(),
+    sdp: z.string(),
+  }),
+});
+
+export const WebRTCIceCandidateSchema = z.object({
+  roomCode: z.string().min(1),
+  targetSocketId: z.string().min(1),
+  candidate: z.record(z.unknown()),
+});
