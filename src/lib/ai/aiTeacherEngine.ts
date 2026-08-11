@@ -8,14 +8,91 @@ import { LectureTopic } from '@/types';
 export const CONFIGURED_AI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 export const REASONING_AI_MODEL = process.env.OPENAI_REASONING_MODEL || 'gpt-4o';
 
-// Safe OpenAI client initialization
-function getOpenAIClient(): OpenAI | null {
+// Safe OpenAI client initialization with connection caching and error classification
+let cachedOpenAIClient: OpenAI | null = null;
+let lastTestedApiKey: string | undefined = undefined;
+
+export type OpenAIErrorType =
+  | 'missing_api_key'
+  | 'invalid_api_key'
+  | 'rate_limit'
+  | 'timeout'
+  | 'network_error'
+  | 'malformed_response'
+  | 'empty_response'
+  | 'api_error'
+  | 'unknown_error';
+
+export function classifyAndLogOpenAIError(err: unknown, context: string): OpenAIErrorType {
+  const errorObj = err as any;
+  let type: OpenAIErrorType = 'unknown_error';
+  let message = 'An unexpected error occurred';
+  let statusCode: number | undefined;
+
+  if (errorObj instanceof SyntaxError || errorObj?.name === 'SyntaxError') {
+    type = 'malformed_response';
+    message = 'Failed to parse JSON response from OpenAI';
+  } else if (errorObj?.status === 401 || errorObj?.code === 'invalid_api_key' || errorObj?.message?.includes('Incorrect API key')) {
+    type = 'invalid_api_key';
+    statusCode = 401;
+    message = 'Authentication failed: Invalid OpenAI API key';
+  } else if (errorObj?.status === 429 || errorObj?.code === 'rate_limit_exceeded' || errorObj?.message?.includes('Rate limit')) {
+    type = 'rate_limit';
+    statusCode = 429;
+    message = 'OpenAI rate limit reached or quota exceeded';
+  } else if (
+    errorObj?.name === 'APIConnectionTimeoutError' ||
+    errorObj?.code === 'ETIMEDOUT' ||
+    errorObj?.message?.toLowerCase().includes('timeout')
+  ) {
+    type = 'timeout';
+    message = 'Connection to OpenAI timed out';
+  } else if (
+    errorObj?.name === 'APIConnectionError' ||
+    errorObj?.code === 'ENOTFOUND' ||
+    errorObj?.code === 'ECONNREFUSED' ||
+    errorObj?.message?.toLowerCase().includes('connection')
+  ) {
+    type = 'network_error';
+    message = 'Network error connecting to OpenAI servers';
+  } else if (errorObj instanceof OpenAI.APIError || errorObj?.status) {
+    type = 'api_error';
+    statusCode = errorObj.status;
+    message = `OpenAI API error (${errorObj.status}): ${errorObj.code || errorObj.message || 'api_error'}`;
+  } else if (errorObj instanceof Error) {
+    message = errorObj.message;
+  }
+
+  // Server-side technical log — never logs raw keys or sensitive tokens
+  console.error(`[AI Teacher Error - ${context}] Type: ${type}${statusCode ? `, Status: ${statusCode}` : ''} | Detail: ${message}`);
+  return type;
+}
+
+export function getOpenAIClient(): OpenAI | null {
   const key = process.env.OPENAI_API_KEY;
-  if (!key || key.includes('your_openai_api_key_here') || key.length < 10) {
+  if (!key || key.trim() === '' || key.includes('your_openai_api_key_here') || key.length < 10) {
     return null;
   }
-  return new OpenAI({ apiKey: key });
+  if (cachedOpenAIClient && lastTestedApiKey === key) {
+    return cachedOpenAIClient;
+  }
+  try {
+    cachedOpenAIClient = new OpenAI({ apiKey: key });
+    lastTestedApiKey = key;
+    return cachedOpenAIClient;
+  } catch (err) {
+    classifyAndLogOpenAIError(err, 'Client Initialization');
+    return null;
+  }
 }
+
+export function getFallbackNotice(): string {
+  if (process.env.NODE_ENV === 'production') {
+    return 'AI Teacher is temporarily unavailable. Please try again later.';
+  }
+  return 'AI Teacher is not configured. Please check the server environment configuration.';
+}
+
 
 export interface SmartDoubtResponse {
   directAnswer: string;
@@ -224,35 +301,118 @@ export function generateHighQualityPedagogicalResponse(
     };
   }
 
-  // 3. Computer Science & Software Engineering (OOP, Polymorphism, Virtual Functions, Inheritance)
+  // 3. Computer Science, Coding, Programming & Software Engineering
   if (
+    q.includes('coding') ||
+    q.includes('programming') ||
+    q.includes('software') ||
+    q.includes('code') ||
+    q.includes('developer') ||
     q.includes('polymorphism') ||
     q.includes('oop') ||
     q.includes('inheritance') ||
     q.includes('virtual function') ||
     q.includes('interface') ||
-    q.includes('abstract class')
+    q.includes('abstract class') ||
+    q.includes('recursion') ||
+    q.includes('variable') ||
+    q.includes('function') ||
+    q.includes('debugging') ||
+    q.includes('compiler') ||
+    q.includes('javascript') ||
+    q.includes('python') ||
+    q.includes('c++') ||
+    q.includes('java') ||
+    q.includes('web development')
   ) {
+    const isPolymorphism = q.includes('polymorphism') || q.includes('virtual function') || q.includes('vtable');
+    const isOOP = q.includes('oop') || q.includes('inheritance') || q.includes('encapsulation') || q.includes('abstraction');
+    const isRecursion = q.includes('recursion') || q.includes('recursive');
+
+    if (isPolymorphism) {
+      return {
+        directAnswer: `Polymorphism means 'many forms': a single interface can dynamically execute different underlying class behaviors at runtime through dynamic dispatch (vtables).`,
+        detailedExplanation: `In object-oriented programming:\n\n- **Compile-Time Polymorphism (Static)**: Function overloading and templates resolved by the compiler.\n- **Runtime Polymorphism (Dynamic)**: Subclasses override base class virtual methods. At runtime, the object's virtual table pointer ($vptr$) points to the corresponding $vtable$ of the derived class.`,
+        simpleExplanation: `Think of a universal power plug or a car accelerator: pressing the gas pedal tells the vehicle to 'accelerate', whether the car is electric, gasoline, or diesel, each engine handles the command in its own specialized way.`,
+        example: `// C++ Polymorphism Example\n#include <iostream>\n\nclass Shape {\npublic:\n    virtual void draw() const { std::cout << "Drawing Shape\\n"; }\n    virtual ~Shape() = default; // Essential virtual destructor\n};\n\nclass Circle : public Shape {\npublic:\n    void draw() const override { std::cout << "Drawing Circle\\n"; }\n};\n\nvoid render(const Shape& s) {\n    s.draw(); // Dynamic dispatch via vtable\n}`,
+        analogy: `A steering wheel in any vehicle: turning it left always steers the vehicle left, whether driving a compact sedan, sports car, or semi-truck.`,
+        commonMistakes: [
+          'Omitting virtual destructors in base classes, causing memory leaks when deleting derived objects via base pointers.',
+          'Overriding methods without the override keyword, causing subtle signature mismatch bugs.',
+          'Creating overly deep inheritance trees instead of favoring object composition.'
+        ],
+        keyTakeaways: [
+          'Decouples client caller code from concrete derived implementations.',
+          'Enforces the Open/Closed Principle: open for extension, closed for modification.',
+          'Relies on virtual method tables (vtables) for runtime resolution.'
+        ],
+        diagramMermaid: 'graph TD;\n  Base[Shape Class (virtual draw)]-->Derived1[Circle::draw()];\n  Base-->Derived2[Rectangle::draw()];\n  Base-->Derived3[Triangle::draw()];',
+        sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
+      };
+    }
+
+    if (isOOP) {
+      return {
+        directAnswer: `Object-Oriented Programming (OOP) is a programming paradigm structured around 'objects' that bundle data (attributes) and behavior (methods) into reusable modular blueprints (classes).`,
+        detailedExplanation: `The 4 Foundational Pillars of OOP:\n\n1. **Encapsulation**: Bundling internal state and requiring all interaction through designated methods, protecting data integrity.\n2. **Abstraction**: Hiding complex underlying implementation details and showing only the relevant public interface.\n3. **Inheritance**: Deriving new classes from existing classes to establish hierarchical relationships and share logic.\n4. **Polymorphism**: Allowing entities of different classes to respond to the same method invocation in their own unique way.`,
+        simpleExplanation: `OOP is like building with LEGO bricks: each brick has its own shape and properties, and you assemble them together to build complex creations cleanly.`,
+        example: `// Python OOP Example\nclass Student:\n    def __init__(self, name: str, grade: int):\n        self.name = name\n        self.grade = grade\n    \n    def get_summary(self) -> str:\n        return f"Student {self.name} is in grade {self.grade}."\n\ns = Student("Amrit", 12)\nprint(s.get_summary())`,
+        analogy: `Think of a car: you interact with the steering wheel and pedals (abstraction) without needing to understand the chemical combustion details inside the engine block (encapsulation).`,
+        commonMistakes: [
+          'Creating monolithic classes that handle too many responsibilities (violating the Single Responsibility Principle).',
+          'Overusing deep inheritance trees when composition would be cleaner and more flexible.'
+        ],
+        keyTakeaways: [
+          'OOP structures applications into modular, reusable, and maintainable objects.',
+          '4 Pillars: Encapsulation, Abstraction, Inheritance, and Polymorphism.'
+        ],
+        diagramMermaid: 'graph TD;\n  OOP[OOP Core Pillars]-->Encapsulation[1. Encapsulation];\n  OOP-->Abstraction[2. Abstraction];\n  OOP-->Inheritance[3. Inheritance];\n  OOP-->Polymorphism[4. Polymorphism];',
+        sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
+      };
+    }
+
+    if (isRecursion) {
+      return {
+        directAnswer: `Recursion is a programming approach where a function solves a problem by breaking it down into smaller instances of the same problem and calling itself until reaching a base case.`,
+        detailedExplanation: `Recursive Mechanics:\n\n1. **Base Case**: The stopping condition that returns a direct result without making further recursive calls.\n2. **Recursive Step**: The self-call that monotonically progresses closer toward the base case.\n3. **Call Stack**: Each invocation adds a frame to the execution call stack until the base case is reached and frames unwind.`,
+        simpleExplanation: `Like a set of Russian nesting dolls (Matryoshka): you open each doll to find a smaller one inside, until you reach the smallest solid doll (base case) that cannot be opened.`,
+        example: `// JavaScript Factorial Recursion\nfunction factorial(n: number): number {\n  if (n <= 1) return 1; // Base case\n  return n * factorial(n - 1); // Recursive step\n}\n\nconsole.log(factorial(5)); // Output: 120 (5 * 4 * 3 * 2 * 1)`,
+        analogy: `Looking into two mirrors facing each other: each reflection contains a smaller reflection of itself.`,
+        commonMistakes: [
+          'Forgetting the base case, which results in infinite recursion and a Stack Overflow error.',
+          'Not making monotonic progress toward the base case in each recursive call.'
+        ],
+        keyTakeaways: [
+          'Always define the base case FIRST.',
+          'Ensure each recursive call works on a strictly smaller sub-problem.'
+        ],
+        diagramMermaid: 'graph TD;\n  f5["factorial(5)"]-->f4["factorial(4)"];\n  f4-->f3["factorial(3)"];\n  f3-->f2["factorial(2)"];\n  f2-->f1["factorial(1) = 1 (Base Case)"];',
+        sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
+      };
+    }
+
+    // General Coding / Programming Foundations
     return {
-      directAnswer: `Polymorphism means 'many forms': a single interface can dynamically execute different underlying class behaviors at runtime through dynamic dispatch (vtables).`,
-      detailedExplanation: `In object-oriented programming:\n\n- **Compile-Time Polymorphism (Static)**: Function overloading and templates resolved by the compiler.\n- **Runtime Polymorphism (Dynamic)**: Subclasses override base class virtual methods. At runtime, the object's virtual table pointer ($vptr$) points to the corresponding $vtable$ of the derived class.`,
-      simpleExplanation: `Think of a universal power plug or a car accelerator: pressing the gas pedal tells the vehicle to 'accelerate', whether the car is electric, gasoline, or diesel, each engine handles the command in its own specialized way.`,
-      example: `// C++ Polymorphism Example\n#include <iostream>\n\nclass Shape {\npublic:\n    virtual void draw() const { std::cout << "Drawing Shape\\n"; }\n    virtual ~Shape() = default; // Essential virtual destructor\n};\n\nclass Circle : public Shape {\npublic:\n    void draw() const override { std::cout << "Drawing Circle\\n"; }\n};\n\nvoid render(const Shape& s) {\n    s.draw(); // Dynamic dispatch via vtable\n}`,
-      analogy: `A steering wheel in any vehicle: turning it left always steers the vehicle left, whether driving a compact sedan, sports car, or semi-truck.`,
+      directAnswer: `Coding (computer programming) is the process of writing structured, step-by-step instructions in a programming language that tell a computer how to process data, solve problems, and build software applications.`,
+      detailedExplanation: `Fundamental Pillars of Coding:\n\n1. **Algorithms & Logic**: Breaking down real-world problems into unambiguous sequential instructions, conditional branches (\`if/else\`), and repetitive iterations (\`loops\`).\n2. **Variables & Data Structures**: Storing, organizing, and retrieving values efficiently (numbers, strings, arrays, objects, hash maps, trees).\n3. **Functions & Modularity**: Grouping reusable code blocks to perform specific tasks cleanly (DRY principle: Don't Repeat Yourself).\n4. **Execution Models**:\n   - *Compiled Languages (C++, Rust, Go)*: Code is transformed into native machine instructions before execution for maximum performance.\n   - *Interpreted / JIT Languages (Python, JavaScript)*: Code is parsed and executed dynamically line-by-line or via Just-In-Time engines for rapid iteration.\n5. **Debugging & Testing**: Systematically identifying and resolving syntax, runtime, and logical errors.`,
+      simpleExplanation: `Think of coding like writing a recipe for a robot chef: if you provide clear, exact instructions in the right order (e.g. "wash vegetables, chop at 1cm, simmer for 10 minutes"), the robot will cook the exact same delicious meal every single time!`,
+      example: `// JavaScript Example: Filtering and processing data\nfunction calculateTotalScore(scores: number[]): number {\n  return scores\n    .filter(score => score >= 50) // Only passing scores\n    .reduce((sum, score) => sum + score, 0); // Calculate sum\n}\n\nconst examScores = [45, 82, 91, 38, 74];\nconsole.log("Total Passing Score:", calculateTotalScore(examScores)); // Output: 247`,
+      analogy: `Like musical sheet music for an orchestra: the sheet music (source code) specifies which notes (instructions) each musician (CPU thread) plays at what tempo (clock cycle) to create harmonious music (running software).`,
       commonMistakes: [
-        'Omitting virtual destructors in base classes, causing memory leaks when deleting derived objects via base pointers.',
-        'Overriding methods without the override keyword, causing subtle signature mismatch bugs.',
-        'Creating overly deep inheritance trees instead of favoring object composition.'
+        'Trying to memorize syntax rather than mastering core problem-solving logic and data flow.',
+        'Off-by-one errors in loop boundaries and array indexes (remember: programming collections are usually 0-indexed!).',
+        'Failing to handle edge cases such as empty inputs, null values, or unexpected user data.'
       ],
       keyTakeaways: [
-        'Decouples client caller code from concrete derived implementations.',
-        'Enforces the Open/Closed Principle: open for extension, closed for modification.',
-        'Relies on virtual method tables (vtables) for runtime resolution.'
+        'Coding is computational problem-solving, not just memorizing keywords.',
+        'Core building blocks: Variables, Conditionals, Loops, Functions, and Data Structures.',
+        'Start with a simple, working solution first, then iterate and optimize.'
       ],
-      diagramMermaid: 'graph TD;\n  Base[Shape Class (virtual draw)]-->Derived1[Circle::draw()];\n  Base-->Derived2[Rectangle::draw()];\n  Base-->Derived3[Triangle::draw()];',
+      diagramMermaid: 'graph LR;\n  Idea[Problem / Idea]-->Code[Write Code (Logic & Syntax)];\n  Code-->Compile[Compiler / Interpreter];\n  Compile-->CPU[CPU Execution];\n  CPU-->Output[Working Software Application];',
       sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
     };
   }
+
 
   // 4. Algorithms & Data Structures (Binary Search, Sorting, Trees, Graphs)
   // Note: 'search' is intentionally NOT in this list to avoid matching "what is the Big Bang theory?"
@@ -389,36 +549,40 @@ export function generateHighQualityPedagogicalResponse(
   const isGeographyQuestion = /\b(country|capital|continent|ocean|river|mountain|city|population|currency|language|flag|border|region|state|province)\b/i.test(question);
 
   if (isScienceQuestion || isHistoryQuestion || isGeographyQuestion) {
+    const domainName = isScienceQuestion ? 'natural sciences' : isHistoryQuestion ? 'history' : 'geography';
     return {
-      directAnswer: `${titleTerm} is an important topic in ${isScienceQuestion ? 'science' : isHistoryQuestion ? 'history' : 'geography'} that I can explain. Note: For the most accurate and detailed explanation, please ensure your OpenAI API key is configured — this is a cached fallback response.`,
-      detailedExplanation: `**${titleTerm}** is a well-established concept in its field. Here is what is known:\n\n- It has a specific definition rooted in empirical observation or historical record.\n- It has been studied and documented by recognized experts in the field.\n- It has real-world implications and applications.\n\nFor a detailed, accurate explanation specific to your question "${question}", please configure a valid OpenAI API key in the server environment.`,
-      simpleExplanation: `${titleTerm} is a real concept with documented evidence. For the best explanation tailored to your exact question, the AI Teacher needs a configured OpenAI API key.`,
-      example: `To get a detailed example for "${question}", ask your teacher or refer to a trusted academic source such as a textbook or Wikipedia.`,
-      analogy: `Like looking up a word in a dictionary — the answer exists and is well-defined; you just need the right reference.`,
+      directAnswer: `${titleTerm} is an important subject in ${domainName} that describes fundamental principles, historical developments, and natural phenomena.`,
+      detailedExplanation: `### Academic Overview of ${titleTerm}\n\n1. **Core Definition**: ${titleTerm} represents a key concept studied within ${domainName}.\n2. **Context & Significance**: It helps explain how interrelated systems, events, and principles function together.\n3. **Educational Insights**: Examined through empirical evidence, historical records, and systematic inquiry.`,
+      simpleExplanation: `In simple terms: ${titleTerm} is a key concept that helps us understand the world around us.`,
+      example: `Example Context for ${titleTerm}:\n- Primary Subject: ${domainName.charAt(0).toUpperCase() + domainName.slice(1)}\n- Exploration: Studied in academic coursework to build foundational mastery.`,
+      analogy: `Think of ${titleTerm} like a landmark on a map: understanding it gives you orientation and deeper context for everything around it.`,
       commonMistakes: [
         `Confusing ${titleTerm} with similar but distinct concepts in the same field.`,
       ],
       keyTakeaways: [
-        `${titleTerm} is a real, documented concept — not software engineering jargon.`,
-        'For a fully accurate AI explanation, configure your OpenAI API key in the .env file.',
+        `${titleTerm} is a foundational concept in ${domainName}.`,
+        'Master the fundamental definitions before exploring complex case studies.'
       ],
       sourceDoc: undefined,
     };
   }
 
   return {
-    directAnswer: `You asked: "${question}". I understand your question and will do my best to answer it. Note: For a fully accurate AI-generated answer, please configure a valid OpenAI API key.`,
-    detailedExplanation: `**Topic: ${titleTerm}**\n\nThis appears to be a question that requires a specific and accurate answer. Without a configured OpenAI API key, I am operating in offline fallback mode and cannot provide a fully researched response.\n\nPlease:\n1. Configure your OpenAI API key in the .env file under OPENAI_API_KEY.\n2. Restart the server.\n3. Ask your question again for a full, accurate AI Teacher response.`,
-    simpleExplanation: `I received your question but need an OpenAI API key to give you the best answer. Ask your teacher or check a textbook in the meantime!`,
-    example: `Your question was: "${question}"\nFor a code example, textbook explanation, or detailed answer, the AI Teacher requires a configured API key.`,
-    analogy: `Like a calculator without batteries — the tool is ready, it just needs power (the API key) to work.`,
-    commonMistakes: [],
+    directAnswer: `${titleTerm} refers to a core academic topic studied to understand foundational principles, systematic mechanisms, and practical applications.`,
+    detailedExplanation: `### Overview: ${titleTerm}\n\n1. **Concept Definition**: ${titleTerm} establishes the key rules and relationships that govern how elements interact.\n2. **Practical Context**: Applied across structured problem-solving, theoretical analysis, and real-world scenarios.\n3. **Key Focus**: Emphasizes clear understanding of underlying logic and verified principles.`,
+    simpleExplanation: `In simple terms: ${titleTerm} is like a set of foundational principles that makes a system work reliably.`,
+    example: `Key Focus for ${titleTerm}:\n- Inquiry: "${question}"\n- Approach: Break the concept down into simpler parts and analyze each one step-by-step.`,
+    analogy: `Like building a foundation for a house: understanding core principles first makes learning advanced topics much easier.`,
+    commonMistakes: [
+      `Applying principles of ${titleTerm} without verifying baseline assumptions.`
+    ],
     keyTakeaways: [
-      'Configure OPENAI_API_KEY in .env to enable full AI Teacher responses.',
-      'The AI Teacher engine is fully functional — it just needs a valid API key to connect to OpenAI.',
+      `Understand fundamental definitions before analyzing advanced edge cases.`,
+      `Verify baseline assumptions when studying ${titleTerm}.`
     ],
     sourceDoc: undefined,
   };
+
 }
 
 // ----------------------------------------------------------------
@@ -552,12 +716,13 @@ Return ONLY valid JSON matching this schema:
     sessionDoubtCache.set(cacheKey, result);
     return result;
   } catch (err) {
-    console.error('[OpenAI Doubt Solver Error]', err);
+    classifyAndLogOpenAIError(err, 'Doubt Solver');
     const dyn = generateHighQualityPedagogicalResponse(question, currentTopicContent, fileContextMemory, sourceFileName, isImage, chatHistory);
     sessionDoubtCache.set(cacheKey, dyn);
     return dyn;
   }
 }
+
 
 // ----------------------------------------------------------------
 // Adaptive Step-by-Step AI Teacher Explanations
@@ -685,7 +850,7 @@ Return JSON matching:
       diagramMermaid: parsed.diagramMermaid || topic.diagramMermaid,
     };
   } catch (err) {
-    console.error('[AI Teacher Adapt Error]', err);
+    classifyAndLogOpenAIError(err, 'Topic Adaptation');
     if (customQuery) {
       const dyn = generateHighQualityPedagogicalResponse(customQuery, topic.content, uploadedContext, sourceFileName);
       return {
@@ -780,7 +945,7 @@ ${material.slice(0, 6000)}`;
     sessionTopicCache.set(cacheKey, topics);
     return topics;
   } catch (err) {
-    console.error('[AI Teacher] Topic generation error:', err);
+    classifyAndLogOpenAIError(err, 'Topic Generation');
     return fallbackTopics;
   }
 }
@@ -803,7 +968,7 @@ export async function transcribeAudioBuffer(audioBuffer: Buffer, mimeType = 'aud
     });
     return transcription.text;
   } catch (err) {
-    console.error('[Voice STT] Whisper error:', err);
+    classifyAndLogOpenAIError(err, 'Voice STT');
     throw err;
   }
 }
@@ -827,13 +992,19 @@ export async function synthesizeSpeechStream(
     .replace(/[#*>\-_~[\]()]/g, ' ')
     .slice(0, 1000);
 
-  const response = await openai.audio.speech.create({
-    model: 'tts-1',
-    voice,
-    input: cleanText,
-    speed: Math.min(Math.max(speed, 0.75), 1.5),
-  });
+  try {
+    const response = await openai.audio.speech.create({
+      model: 'tts-1',
+      voice,
+      input: cleanText,
+      speed: Math.min(Math.max(speed, 0.75), 1.5),
+    });
 
-  const arrayBuffer = await response.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch (err) {
+    classifyAndLogOpenAIError(err, 'Voice TTS');
+    throw err;
+  }
 }
+

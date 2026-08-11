@@ -1,4 +1,12 @@
+import { loadEnvConfig } from '@next/env';
 import { z } from 'zod';
+
+// Automatically load .env, .env.local, etc. for custom server entry point
+try {
+  loadEnvConfig(process.cwd());
+} catch {
+  // Ignore in environments where @next/env cannot read files
+}
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -10,3 +18,4 @@ const envSchema = z.object({
 });
 
 export const env = envSchema.parse(process.env);
+
