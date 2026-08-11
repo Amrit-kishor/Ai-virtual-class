@@ -22,6 +22,7 @@ export const CodingPlayground: React.FC = () => {
   const [result, setResult] = useState<RunResult | null>(null);
   const [aiReview, setAiReview] = useState<string>('');
   const [isRunning, setIsRunning] = useState<boolean>(false);
+  const [stdin, setStdin] = useState<string>('');
 
   const handleLanguageChange = (lang: 'javascript' | 'python' | 'cpp' | 'java') => {
     setLanguage(lang);
@@ -49,7 +50,7 @@ export const CodingPlayground: React.FC = () => {
       const res = await safeFetchJson<RunResult>('/api/code/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, language }),
+        body: JSON.stringify({ code, language, stdin }),
       });
 
       if (res.ok && res.data) {
@@ -149,6 +150,21 @@ export const CodingPlayground: React.FC = () => {
             value={code}
             onChange={(e) => setCode(e.target.value)}
             className="flex-1 bg-transparent p-3 font-mono text-xs text-emerald-400 focus:outline-none resize-none leading-relaxed"
+            spellCheck={false}
+          />
+        </div>
+
+        {/* Stdin Input */}
+        <div className="bg-slate-950 rounded-xl border border-white/10 overflow-hidden" style={{ maxHeight: '100px' }}>
+          <div className="bg-slate-900/80 px-3 py-1 border-b border-white/10 text-[10px] font-mono text-slate-400 flex items-center gap-1">
+            <Terminal size={10} /> stdin (optional custom input)
+          </div>
+          <textarea
+            value={stdin}
+            onChange={(e) => setStdin(e.target.value)}
+            placeholder="Enter program input here (e.g. 5\n1 2 3 4 5)"
+            className="w-full bg-transparent p-2 font-mono text-xs text-slate-300 focus:outline-none resize-none placeholder:text-slate-600"
+            rows={3}
             spellCheck={false}
           />
         </div>

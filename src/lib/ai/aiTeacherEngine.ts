@@ -255,31 +255,77 @@ export function generateHighQualityPedagogicalResponse(
   }
 
   // 4. Algorithms & Data Structures (Binary Search, Sorting, Trees, Graphs)
+  // Note: 'search' is intentionally NOT in this list to avoid matching "what is the Big Bang theory?"
+  // etc. Only specific algorithm terms trigger this branch.
   if (
     q.includes('binary search') ||
+    q.includes('linear search') ||
+    q.includes('bubble sort') ||
+    q.includes('merge sort') ||
+    q.includes('quick sort') ||
+    q.includes('sorting algorithm') ||
+    q.includes('linked list') ||
+    q.includes('binary tree') ||
+    q.includes('depth first') ||
+    q.includes('breadth first') ||
+    q.includes('time complexity') ||
+    q.includes('space complexity') ||
+    q.includes('big o') ||
     q.includes('algorithm') ||
-    q.includes('search') ||
-    q.includes('sorted') ||
     q.includes('bisect') ||
-    q.includes('complexity')
+    (q.includes('search') && (q.includes('array') || q.includes('sorted') || q.includes('tree') || q.includes('binary')))
   ) {
+    const isBinarySearch = q.includes('binary search') || (q.includes('binary') && q.includes('search'));
+    const isCppRequest = q.includes('c++') || q.includes('cpp');
+    const isPythonRequest = q.includes('python');
+    const isJavaRequest = q.includes('java') && !q.includes('javascript');
+    const isBeginnerRequest = q.includes('beginner') || q.includes('simple') || q.includes('easy') || q.includes('basic');
+
     return {
-      directAnswer: `Binary Search is an efficient $O(\\log N)$ search algorithm that repeatedly divides a sorted array in half to find a target value by computing mid = low + (high - low) / 2.`,
-      detailedExplanation: `Binary Search Invariants & Mechanics:\n\n1. **Precondition**: The input collection MUST be sorted monotonically.\n2. **Search Window**: Maintained between indices $[\\text{low}, \\text{high}]$.\n3. **Integer Overflow Prevention**: Compute $\\text{mid} = \\text{low} + \\lfloor(\\text{high} - \\text{low}) / 2\\rfloor$ rather than $(\\text{low} + \\text{high}) / 2$.\n4. **Logarithmic Halving**: Discarding half the remaining search interval in each iteration yields worst-case time complexity $O(\\log_2 N)$.`,
-      simpleExplanation: `Like finding a word in a dictionary: you open directly to the middle. If your word comes earlier alphabetically, you discard the entire right half and search only the left half.`,
-      example: `function binarySearch(arr: number[], target: number): number {\n  let low = 0;\n  let high = arr.length - 1;\n  while (low <= high) {\n    const mid = low + Math.floor((high - low) / 2);\n    if (arr[mid] === target) return mid;\n    if (arr[mid] < target) low = mid + 1;\n    else high = mid - 1;\n  }\n  return -1; // Target not found\n}`,
-      analogy: `Playing a 1-to-100 number guessing game where every 'higher' or 'lower' response instantly eliminates 50% of all remaining guesses.`,
-      commonMistakes: [
-        'Attempting to run binary search on an unsorted array.',
-        'Using (low + high) / 2, which overflows 32-bit integers when low + high > 2^31 - 1.',
-        'Using while (low < high) instead of while (low <= high), missing target elements at the boundaries.'
-      ],
-      keyTakeaways: [
-        'Time Complexity: $O(\\log N)$ worst/average, $O(1)$ best.',
-        'Space Complexity: $O(1)$ iterative, $O(\\log N)$ recursive.',
-        'Requires sorted data or monotonic condition.'
-      ],
-      diagramMermaid: 'graph TD;\n  Array[Sorted Array]-->Midpoint{Check arr[mid]};\n  Midpoint-->|Target < arr[mid]| Left[Search Left Half];\n  Midpoint-->|Target > arr[mid]| Right[Search Right Half];\n  Midpoint-->|Target == arr[mid]| Found[Return Index];',
+      directAnswer: isBinarySearch
+        ? `Binary Search is an efficient $O(\\log N)$ divide-and-conquer search algorithm that works on sorted arrays by repeatedly halving the search space.`
+        : `This algorithm or data structure question involves analyzing how we organize, search, and process data efficiently with optimal time and space complexity.`,
+      detailedExplanation: isBinarySearch
+        ? `Binary Search Mechanics:\n\n1. **Precondition**: The input array MUST be sorted in ascending or descending order.\n2. **Search Window**: Maintained with two pointers — 'low' and 'high'.\n3. **Mid Calculation**: Always use 'mid = low + (high - low) / 2' to prevent integer overflow.\n4. **Halving**: Each iteration discards half the remaining elements, giving $O(\\log_2 N)$ worst-case performance.`
+        : `Algorithms define step-by-step procedures for solving computational problems. Key concepts include time complexity (how fast) and space complexity (how much memory).`,
+      simpleExplanation: isBinarySearch
+        ? (isBeginnerRequest
+            ? `Imagine finding a word in a dictionary. Instead of reading every page, you open to the MIDDLE. If your word comes before the middle word, tear away the right half and look at the new middle. Keep halving until you find it!`
+            : `Like a number guessing game where each "higher" or "lower" hint lets you eliminate half the remaining possibilities every single turn.`)
+        : `Algorithms are like cooking recipes: a fixed sequence of steps that always produces the correct result when followed in order.`,
+      example: isBinarySearch
+        ? (isCppRequest
+            ? `// C++ Binary Search\n#include <iostream>\n#include <vector>\nusing namespace std;\n\nint binarySearch(vector<int>& arr, int target) {\n    int low = 0, high = arr.size() - 1;\n    while (low <= high) {\n        int mid = low + (high - low) / 2;\n        if (arr[mid] == target) return mid;\n        if (arr[mid] < target) low = mid + 1;\n        else high = mid - 1;\n    }\n    return -1;\n}\n\nint main() {\n    vector<int> arr = {1, 3, 5, 7, 9, 11};\n    cout << binarySearch(arr, 7) << endl; // Output: 3\n}`
+            : isPythonRequest
+            ? `# Python Binary Search\ndef binary_search(arr, target):\n    low, high = 0, len(arr) - 1\n    while low <= high:\n        mid = (low + high) // 2\n        if arr[mid] == target:\n            return mid\n        elif arr[mid] < target:\n            low = mid + 1\n        else:\n            high = mid - 1\n    return -1\n\narr = [1, 3, 5, 7, 9, 11]\nprint(binary_search(arr, 7))  # Output: 3`
+            : `// TypeScript / JavaScript Binary Search\nfunction binarySearch(arr: number[], target: number): number {\n  let low = 0, high = arr.length - 1;\n  while (low <= high) {\n    const mid = low + Math.floor((high - low) / 2);\n    if (arr[mid] === target) return mid;\n    if (arr[mid] < target) low = mid + 1;\n    else high = mid - 1;\n  }\n  return -1;\n}`)
+        : `// General algorithm pseudocode\n// 1. Define inputs and outputs\n// 2. Break the problem into smaller sub-problems\n// 3. Solve each sub-problem\n// 4. Combine results`,
+      analogy: isBinarySearch
+        ? `Playing a 1-to-100 guessing game: every "higher" or "lower" clue eliminates exactly HALF the remaining guesses. After just 7 guesses you can find any number from 1 to 100.`
+        : `Like following a GPS navigation route: the algorithm finds the optimal path step-by-step given a start, an end, and the road constraints.`,
+      commonMistakes: isBinarySearch
+        ? [
+          'Applying binary search to an unsorted array (it only works on sorted data).',
+          'Using (low + high) / 2 — this can overflow for large arrays. Use low + (high - low) / 2.',
+          'Using while (low < high) instead of while (low <= high) — this misses the last element.',
+        ]
+        : [
+          'Confusing time complexity (speed) with space complexity (memory usage).',
+          'Forgetting that O(1) is best case and O(n) means linear growth with input size.',
+        ],
+      keyTakeaways: isBinarySearch
+        ? [
+          'Time Complexity: $O(\\log N)$ worst/average, $O(1)$ best case.',
+          'Space Complexity: $O(1)$ iterative, $O(\\log N)$ recursive (call stack).',
+          'Requires sorted data — always verify the precondition.',
+        ]
+        : [
+          'Always analyze both time AND space complexity.',
+          'Choose data structures and algorithms based on the access patterns of your problem.',
+        ],
+      diagramMermaid: isBinarySearch
+        ? 'graph TD;\n  Array[Sorted Array]-->Midpoint{Check arr[mid]};\n  Midpoint-->|Target < arr[mid]| Left[Search Left Half];\n  Midpoint-->|Target > arr[mid]| Right[Search Right Half];\n  Midpoint-->|Target == arr[mid]| Found[Return Index];'
+        : undefined,
       sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
     };
   }
@@ -315,47 +361,63 @@ export function generateHighQualityPedagogicalResponse(
   }
 
   // 6. Image / Diagram / Visual Interpretation
-  if (imageAttached || q.includes('image') || q.includes('diagram') || q.includes('screenshot')) {
+  if (imageAttached) {
     return {
-      directAnswer: `This visual artifact illustrates a structured technical diagram depicting system components, relationship flows, and input-output transformations.`,
-      detailedExplanation: `Visual Breakdown:\n1. **Core Elements**: Primary entities and nodes connected via directed edges.\n2. **Data Flow**: Represents sequential or parallel transmission between boundaries.\n3. **State Transitions**: Validates intermediate steps before committing the final state.`,
-      simpleExplanation: `Like a blueprint or map: it outlines how each part connects to the others so you can trace the journey from start to finish.`,
-      example: `Input Flow -> [Processing Stage] -> [Verification] -> Output`,
-      analogy: `Like a subway transit map showing stations and rail connections.`,
-      commonMistakes: [
-        'Misinterpreting bidirectional relationships as simple one-way flows.',
-        'Overlooking error/exception exit paths in process diagrams.'
-      ],
-      keyTakeaways: [
-        'Diagrams provide high-level abstraction of interconnected components.',
-        'Trace arrows in order to follow state progression.'
-      ],
-      diagramMermaid: 'graph LR;\n  Input-->Process;\n  Process-->Verification;\n  Verification-->Output;',
-      sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
+      directAnswer: `I can see an image has been attached. Please describe what you would like me to explain about it, or I will provide a general analysis.`,
+      detailedExplanation: `Visual Breakdown: The image appears to contain structured information. Please clarify what specific aspect you would like me to focus on — for example, a diagram, chart, code screenshot, or scientific image.`,
+      simpleExplanation: `I see you've attached an image. What would you like me to explain about it?`,
+      example: `Please describe the image content or ask a specific question about it.`,
+      analogy: `Like asking a teacher to explain a textbook illustration — be specific about what you want to understand.`,
+      commonMistakes: [],
+      keyTakeaways: ['Ask specific questions about the image for the most helpful explanation.'],
+      sourceDoc: undefined,
     };
   }
 
-  // 7. Universal Academic Knowledge Synthesizer (Neutral, Clean, Unbiased)
-  // Extracts primary terms from the student's question to formulate a direct, high-value pedagogical answer
-  const cleanTerm = question.replace(/^(what is|who was|explain|tell me about|how does|why is|define)\s+/i, '').replace(/[?.,!]/g, '').trim();
+  // 7. Universal catch-all: honest subject-neutral answer
+  // Extract what the student is actually asking about and give a direct, honest answer.
+  // IMPORTANT: Do NOT generate software engineering / API / programming jargon for non-programming questions.
+  const cleanTerm = question
+    .replace(/^(what is|what are|who is|who was|explain|tell me about|how does|how do|why is|why does|define|describe|what does)\s+/i, '')
+    .replace(/[?.,!]/g, '')
+    .trim();
   const titleTerm = cleanTerm.charAt(0).toUpperCase() + cleanTerm.slice(1);
 
+  // Detect if it's a science/history/geography/general knowledge question
+  const isScienceQuestion = /\b(theory|law|force|energy|atom|molecule|element|species|evolution|gravity|light|sound|wave|quantum|relativity|thermodynamics|nuclear|radiation|particle|planet|orbit|climate|weather|ocean|earthquake|volcano|ecosystem|food chain)\b/i.test(question);
+  const isHistoryQuestion = /\b(history|war|revolution|empire|civilization|century|battle|treaty|dynasty|ancient|medieval|colonial|independence|constitution|president|king|queen|pharaoh)\b/i.test(question);
+  const isGeographyQuestion = /\b(country|capital|continent|ocean|river|mountain|city|population|currency|language|flag|border|region|state|province)\b/i.test(question);
+
+  if (isScienceQuestion || isHistoryQuestion || isGeographyQuestion) {
+    return {
+      directAnswer: `${titleTerm} is an important topic in ${isScienceQuestion ? 'science' : isHistoryQuestion ? 'history' : 'geography'} that I can explain. Note: For the most accurate and detailed explanation, please ensure your OpenAI API key is configured — this is a cached fallback response.`,
+      detailedExplanation: `**${titleTerm}** is a well-established concept in its field. Here is what is known:\n\n- It has a specific definition rooted in empirical observation or historical record.\n- It has been studied and documented by recognized experts in the field.\n- It has real-world implications and applications.\n\nFor a detailed, accurate explanation specific to your question "${question}", please configure a valid OpenAI API key in the server environment.`,
+      simpleExplanation: `${titleTerm} is a real concept with documented evidence. For the best explanation tailored to your exact question, the AI Teacher needs a configured OpenAI API key.`,
+      example: `To get a detailed example for "${question}", ask your teacher or refer to a trusted academic source such as a textbook or Wikipedia.`,
+      analogy: `Like looking up a word in a dictionary — the answer exists and is well-defined; you just need the right reference.`,
+      commonMistakes: [
+        `Confusing ${titleTerm} with similar but distinct concepts in the same field.`,
+      ],
+      keyTakeaways: [
+        `${titleTerm} is a real, documented concept — not software engineering jargon.`,
+        'For a fully accurate AI explanation, configure your OpenAI API key in the .env file.',
+      ],
+      sourceDoc: undefined,
+    };
+  }
+
   return {
-    directAnswer: `${titleTerm} refers to a foundational concept studied to understand underlying principles, functional mechanisms, and systematic behavior in this domain.`,
-    detailedExplanation: `Comprehensive Overview of ${titleTerm}:\n\n1. **Core Definition**: ${titleTerm} establishes the baseline rules and relationships that govern how elements interact.\n2. **Working Mechanism**: Explains why specific inputs produce predictable outcomes under defined conditions.\n3. **Practical Context**: Applied across practical problem solving, theoretical analysis, and real-world implementations.`,
-    simpleExplanation: `In simple terms: ${titleTerm} is like the set of rules or ingredients that makes a system work reliably every time.`,
-    example: `Key Characteristics of ${titleTerm}:\n- Primary Function: Systematic and repeatable execution.\n- Validation: Confirmed through empirical observation and direct testing.`,
-    analogy: `Think of ${titleTerm} like a well-designed recipe: when you follow the steps with the right ingredients, you achieve the expected result consistently.`,
-    commonMistakes: [
-      `Confusing ${titleTerm} with related but distinct terminology in the same subject area.`,
-      `Applying principles of ${titleTerm} outside its valid operational conditions.`
-    ],
+    directAnswer: `You asked: "${question}". I understand your question and will do my best to answer it. Note: For a fully accurate AI-generated answer, please configure a valid OpenAI API key.`,
+    detailedExplanation: `**Topic: ${titleTerm}**\n\nThis appears to be a question that requires a specific and accurate answer. Without a configured OpenAI API key, I am operating in offline fallback mode and cannot provide a fully researched response.\n\nPlease:\n1. Configure your OpenAI API key in the .env file under OPENAI_API_KEY.\n2. Restart the server.\n3. Ask your question again for a full, accurate AI Teacher response.`,
+    simpleExplanation: `I received your question but need an OpenAI API key to give you the best answer. Ask your teacher or check a textbook in the meantime!`,
+    example: `Your question was: "${question}"\nFor a code example, textbook explanation, or detailed answer, the AI Teacher requires a configured API key.`,
+    analogy: `Like a calculator without batteries — the tool is ready, it just needs power (the API key) to work.`,
+    commonMistakes: [],
     keyTakeaways: [
-      `Understand the fundamental definition before tackling complex applications.`,
-      `Verify assumptions and edge conditions when analyzing ${titleTerm}.`
+      'Configure OPENAI_API_KEY in .env to enable full AI Teacher responses.',
+      'The AI Teacher engine is fully functional — it just needs a valid API key to connect to OpenAI.',
     ],
-    diagramMermaid: 'graph LR;\n  Concept[Core Concept]-->Analysis[Analysis & Rules];\n  Analysis-->Application[Practical Application];',
-    sourceDoc: isContextRelevant(question, fileContext) ? sourceDoc : undefined,
+    sourceDoc: undefined,
   };
 }
 

@@ -1,12 +1,30 @@
 import { NextResponse } from 'next/server';
 import { reviewCodeSnippet } from '@/lib/ai/openai';
-import { exec } from 'child_process';
+import { exec, execSync } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
 const execAsync = promisify(exec);
+
+// ── Runtime availability detection (cached per process) ──────────
+const _runtimeCache: Record<string, boolean> = {};
+function runtimeAvailable(cmd: string): boolean {
+  if (_runtimeCache[cmd] === undefined) {
+    try { execSync(`which ${cmd}`, { stdio: 'ignore' }); _runtimeCache[cmd] = true; }
+    catch { _runtimeCache[cmd] = false; }
+  }
+  return _runtimeCache[cmd];
+}
+
+// ── C++ compiler detection (g++ preferred, clang++ fallback) ─────
+function getCppCompiler(): string | null {
+  if (runtimeAvailable('g++')) return 'g++';
+  if (runtimeAvailable('clang++')) return 'clang++';
+  return null;
+}
+
 
 const TEMP_DIR = path.join(process.cwd(), 'tmp_code_sandbox');
 
@@ -28,6 +46,7 @@ function execOptions(timeoutMs: number) {
     timeout: timeoutMs,
     maxBuffer: MAX_OUTPUT_BYTES,
     killSignal: 'SIGKILL' as const,
+    encoding: 'utf8' as const,
   };
 }
 
@@ -54,25 +73,53 @@ export async function POST(req: Request) {
   const startTime = Date.now();
   try {
     const body = await req.json();
-    const { code, language } = body as { code?: unknown; language?: unknown };
+    const { code, language, stdin } = body as { code?: unknown; language?: unknown; stdin?: unknown };
 
     if (!code || typeof code !== 'string' || !code.trim()) {
       return NextResponse.json({ error: 'Code content is required.' }, { status: 400 });
     }
 
     const lang = (typeof language === 'string' ? language : 'javascript').toLowerCase();
+    const stdinInput = typeof stdin === 'string' ? stdin : '';
     const fileId = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
     let status: ExecutionStatus = 'success';
     let stdout = '';
     let stderr = '';
 
+    // Helper: exec with optional stdin pipe.
+    // Returns { stdout: string, stderr: string } always.
+    async function execWithStdin(
+      cmd: string,
+      opts: object,
+      input?: string
+    ): Promise<{ stdout: string; stderr: string }> {
+      const execOpts = opts as Parameters<typeof execAsync>[1];
+      let raw: { stdout: string | Buffer; stderr: string | Buffer };
+      if (!input || !input.trim()) {
+        raw = await execAsync(cmd, execOpts);
+      } else {
+        // Pipe stdin by writing it to a temp file and using shell redirection
+        const stdinFile = path.join(TEMP_DIR, `stdin_${fileId}.txt`);
+        fs.writeFileSync(stdinFile, input, 'utf-8');
+        try {
+          raw = await execAsync(`${cmd} < "${stdinFile}"`, execOpts);
+        } finally {
+          safeUnlink(stdinFile);
+        }
+      }
+      return {
+        stdout: raw.stdout?.toString() ?? '',
+        stderr: raw.stderr?.toString() ?? '',
+      };
+    }
+
     // ── JavaScript / Node.js ─────────────────────────────────────────
     if (lang === 'javascript' || lang === 'js' || lang === 'node') {
       const filePath = path.join(TEMP_DIR, `script_${fileId}.js`);
       try {
         fs.writeFileSync(filePath, code, 'utf-8');
-        const result = await execAsync(`node "${filePath}"`, execOptions(RUN_TIMEOUT_MS));
+        const result = await execWithStdin(`node "${filePath}"`, execOptions(RUN_TIMEOUT_MS), stdinInput);
         stdout = result.stdout || '';
         stderr = result.stderr || '';
         status = 'success';
@@ -90,7 +137,7 @@ export async function POST(req: Request) {
       const filePath = path.join(TEMP_DIR, `script_${fileId}.py`);
       try {
         fs.writeFileSync(filePath, code, 'utf-8');
-        const result = await execAsync(`python3 "${filePath}"`, execOptions(RUN_TIMEOUT_MS));
+        const result = await execWithStdin(`python3 "${filePath}"`, execOptions(RUN_TIMEOUT_MS), stdinInput);
         stdout = result.stdout || '';
         stderr = result.stderr || '';
         status = 'success';
@@ -110,10 +157,20 @@ export async function POST(req: Request) {
       try {
         fs.writeFileSync(srcPath, code, 'utf-8');
 
-        // Step 1: Compile — surface real g++ errors
+        // Step 1: Compile — auto-detect compiler
+        const compiler = getCppCompiler();
+        if (!compiler) {
+          return NextResponse.json({
+            status: 'execution_error',
+            output: '',
+            stderr: 'No C++ compiler found on this server. Neither g++ nor clang++ is available.',
+            executionTimeMs: Date.now() - startTime,
+            aiReview: '',
+          });
+        }
         try {
           const compileResult = await execAsync(
-            `g++ -std=c++17 -O2 "${srcPath}" -o "${binPath}"`,
+            `${compiler} -std=c++17 -O2 "${srcPath}" -o "${binPath}"`,
             execOptions(COMPILE_TIMEOUT_MS)
           );
           stderr = compileResult.stderr || ''; // warnings even on success
@@ -122,7 +179,7 @@ export async function POST(req: Request) {
           return NextResponse.json({
             status: ce.killed ? 'timeout' : 'compile_error',
             output: ce.stdout || '',
-            stderr: truncate(ce.stderr || 'g++ compilation failed.'),
+            stderr: truncate(ce.stderr || 'C++ compilation failed.'),
             executionTimeMs: Date.now() - startTime,
             aiReview: '',
           });
@@ -130,7 +187,7 @@ export async function POST(req: Request) {
 
         // Step 2: Run the compiled binary
         try {
-          const runResult = await execAsync(binaryCmd(binPath), execOptions(RUN_TIMEOUT_MS));
+          const runResult = await execWithStdin(binaryCmd(binPath), execOptions(RUN_TIMEOUT_MS), stdinInput);
           stdout = runResult.stdout || '';
           stderr += runResult.stderr || '';
           status = 'success';
@@ -146,6 +203,16 @@ export async function POST(req: Request) {
 
     // ── Java ──────────────────────────────────────────────────────────
     } else if (lang === 'java') {
+      // Check Java runtime availability before attempting compilation
+      if (!runtimeAvailable('javac') || !runtimeAvailable('java')) {
+        return NextResponse.json({
+          status: 'execution_error',
+          output: '',
+          stderr: 'Java runtime (javac/java) is not available on this server. Java execution is not supported in this environment.',
+          executionTimeMs: Date.now() - startTime,
+          aiReview: '',
+        });
+      }
       const classNameMatch = code.match(/public\s+class\s+([A-Za-z0-9_]+)/);
       const className = classNameMatch ? classNameMatch[1] : 'Main';
       const javaDir = path.join(TEMP_DIR, `java_${fileId}`);
@@ -176,9 +243,10 @@ export async function POST(req: Request) {
 
         // Step 2: Run
         try {
-          const runResult = await execAsync(
+          const runResult = await execWithStdin(
             `java "${className}"`,
-            { ...execOptions(RUN_TIMEOUT_MS), cwd: javaDir }
+            { ...execOptions(RUN_TIMEOUT_MS), cwd: javaDir },
+            stdinInput
           );
           stdout = runResult.stdout || '';
           stderr += runResult.stderr || '';
