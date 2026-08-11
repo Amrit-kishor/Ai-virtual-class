@@ -100,10 +100,14 @@ export const PrivateAIDoubt: React.FC<PrivateAIDoubtProps> = ({
   const [voiceState, setVoiceState] = useState<VoiceState>('IDLE');
   const [questionQueue, setQuestionQueue] = useState<QueuedQuestion[]>([]);
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
 
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const isNearBottomRef = useRef(true);
+  const prevDoubtsCountRef = useRef(doubts.length);
 
   // Voice Assistant Hook
   const handleTranscript = useCallback((transcript: string) => {
@@ -151,10 +155,37 @@ export const PrivateAIDoubt: React.FC<PrivateAIDoubtProps> = ({
     else setVoiceState('IDLE');
   }, [isListening, isPlayingAudio, isLoading, voiceInputError]);
 
-  // Scroll to bottom smoothly on new doubt messages
+  // Track user scroll position in chat container
+  const handleScroll = useCallback(() => {
+    if (!scrollContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+    const isNear = distanceFromBottom < 120;
+    isNearBottomRef.current = isNear;
+    if (isNear) {
+      setShowScrollBottomBtn(false);
+    }
+  }, []);
+
+  // Smoothly scroll to bottom on new messages or loading if user is near bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const hasNewMessage = doubts.length > prevDoubtsCountRef.current;
+    prevDoubtsCountRef.current = doubts.length;
+
+    if (isNearBottomRef.current || isLoading) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      setShowScrollBottomBtn(false);
+    } else if (hasNewMessage) {
+      setShowScrollBottomBtn(true);
+    }
   }, [doubts, isLoading]);
+
+  const scrollToBottom = () => {
+    isNearBottomRef.current = true;
+    setShowScrollBottomBtn(false);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
 
   // Parse structured markdown sections
   const parseStructuredFromRaw = (answer: string): StructuredDoubt => {
@@ -208,6 +239,13 @@ export const PrivateAIDoubt: React.FC<PrivateAIDoubtProps> = ({
     setIsLoading(true);
     stopSpeech();
 
+    // Auto-scroll on submit so user sees question and thinking spinner immediately
+    isNearBottomRef.current = true;
+    setShowScrollBottomBtn(false);
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 50);
+
     // Add to Question Queue
     const queueItem: QueuedQuestion = {
       id: reqId,
@@ -216,6 +254,7 @@ export const PrivateAIDoubt: React.FC<PrivateAIDoubtProps> = ({
       imageUrl: imageToUse || undefined,
     };
     setQuestionQueue((prev) => [queueItem, ...prev.slice(0, 4)]);
+
 
     // Build multi-turn context
     const chatHistory = doubts.slice(-6).flatMap((d) => [
@@ -369,7 +408,11 @@ export const PrivateAIDoubt: React.FC<PrivateAIDoubtProps> = ({
       </div>
 
       {/* Main Conversation Thread */}
-      <div className="flex-1 overflow-y-auto py-2.5 px-1 space-y-3">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto min-h-0 py-2.5 px-1 space-y-3 relative"
+      >
         {doubts.length === 0 && (
           <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400">
             <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-3 shadow-lg">
@@ -382,7 +425,7 @@ export const PrivateAIDoubt: React.FC<PrivateAIDoubtProps> = ({
           </div>
         )}
 
-        {doubts.map((doubt) => {
+        {[...doubts].sort((a, b) => a.timestamp - b.timestamp).map((doubt) => {
           const structured = parseStructuredFromRaw(doubt.answer);
           return (
             <div key={doubt.id} className="flex flex-col gap-2 bg-slate-950/40 p-3 rounded-xl border border-white/5">
@@ -392,6 +435,7 @@ export const PrivateAIDoubt: React.FC<PrivateAIDoubtProps> = ({
                   <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />
                   <span>Q: {doubt.question}</span>
                 </div>
+
                 <button
                   onClick={() => handleCopy(doubt.id, doubt.answer)}
                   className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800 transition shrink-0"
@@ -521,6 +565,18 @@ export const PrivateAIDoubt: React.FC<PrivateAIDoubtProps> = ({
 
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Floating "↓ New response" button */}
+      {showScrollBottomBtn && (
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-indigo-600/95 hover:bg-indigo-500 text-white text-[11px] font-bold px-3.5 py-1.5 rounded-full shadow-2xl shadow-indigo-950 border border-indigo-400/40 flex items-center gap-1.5 z-20 backdrop-blur-md transition-all hover:scale-105"
+        >
+          <span>↓ New response</span>
+        </button>
+      )}
+
 
       {/* Attached Image Preview */}
       {attachedImage && (

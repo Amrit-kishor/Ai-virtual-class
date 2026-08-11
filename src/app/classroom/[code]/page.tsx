@@ -996,8 +996,9 @@ export default function ClassroomPage() {
           answer: result.data.answer,
           timestamp: Date.now(),
         };
-        setPrivateDoubts((prev) => [doubtObj, ...prev]);
+        setPrivateDoubts((prev) => [...prev, doubtObj]);
       } else {
+
         throw new Error('Doubt solver returned empty response.');
       }
     } catch (err) {
