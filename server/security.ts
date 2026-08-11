@@ -19,13 +19,21 @@ export const corsOptions: CorsOptions = {
   origin: (origin, callback) => {
     // Allow requests with no origin (like mobile apps, curl, server-to-server)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+    const isAllowed =
+      allowedOrigins.includes(origin) ||
+      (process.env.FRONTEND_URL && origin === process.env.FRONTEND_URL) ||
+      (process.env.NEXT_PUBLIC_FRONTEND_URL && origin === process.env.NEXT_PUBLIC_FRONTEND_URL) ||
+      process.env.NODE_ENV === 'development' ||
+      origin.endsWith('.vercel.app');
+
+    if (isAllowed) {
       return callback(null, true);
     } else {
       logger.warn({ origin }, 'CORS request blocked by origin allowlist policy');
       return callback(new Error('Blocked by CORS policy: Unauthorized Origin'));
     }
   },
+
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],

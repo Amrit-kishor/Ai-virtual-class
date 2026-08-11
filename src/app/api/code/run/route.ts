@@ -12,8 +12,18 @@ const execAsync = promisify(exec);
 const _runtimeCache: Record<string, boolean> = {};
 function runtimeAvailable(cmd: string): boolean {
   if (_runtimeCache[cmd] === undefined) {
-    try { execSync(`which ${cmd}`, { stdio: 'ignore' }); _runtimeCache[cmd] = true; }
-    catch { _runtimeCache[cmd] = false; }
+    try {
+      if (cmd === 'g++' || cmd === 'gcc' || cmd === 'clang++' || cmd === 'python3' || cmd === 'python' || cmd === 'node') {
+        execSync(`${cmd} --version`, { stdio: 'ignore' });
+      } else if (cmd === 'javac' || cmd === 'java') {
+        execSync(`${cmd} -version`, { stdio: 'ignore' });
+      } else {
+        execSync(`which ${cmd}`, { stdio: 'ignore' });
+      }
+      _runtimeCache[cmd] = true;
+    } catch {
+      _runtimeCache[cmd] = false;
+    }
   }
   return _runtimeCache[cmd];
 }
@@ -25,11 +35,15 @@ function getCppCompiler(): string | null {
   return null;
 }
 
+// Serverless-safe sandbox directory in /tmp
+const TEMP_DIR = path.join(os.tmpdir(), 'classroom_code_sandbox');
 
-const TEMP_DIR = path.join(process.cwd(), 'tmp_code_sandbox');
-
-if (!fs.existsSync(TEMP_DIR)) {
-  fs.mkdirSync(TEMP_DIR, { recursive: true });
+try {
+  if (!fs.existsSync(TEMP_DIR)) {
+    fs.mkdirSync(TEMP_DIR, { recursive: true });
+  }
+} catch {
+  // Ignore in restricted environments
 }
 
 // ── Resource limits ────────────────────────────────────────────────
@@ -38,7 +52,8 @@ const RUN_TIMEOUT_MS     = 5000;       // hard wall-clock cap for user code exec
 const MAX_OUTPUT_BYTES   = 512 * 1024; // 512 KB stdout/stderr cap prevents memory exhaustion
 
 // ── Structured response type ───────────────────────────────────────
-type ExecutionStatus = 'success' | 'compile_error' | 'runtime_error' | 'timeout' | 'execution_error';
+type ExecutionStatus = 'success' | 'compile_error' | 'runtime_error' | 'timeout' | 'compiler_unavailable' | 'execution_error';
+
 
 // ── Shared exec options with security limits ───────────────────────
 function execOptions(timeoutMs: number) {
@@ -82,6 +97,28 @@ export async function POST(req: Request) {
     const lang = (typeof language === 'string' ? language : 'javascript').toLowerCase();
     const stdinInput = typeof stdin === 'string' ? stdin : '';
     const fileId = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+    // Optional: Forward to dedicated backend code execution server if configured
+    const remoteBackend =
+      process.env.CODE_EXECUTION_BACKEND_URL ||
+      process.env.NEXT_PUBLIC_CODE_EXECUTION_URL ||
+      process.env.BACKEND_URL;
+
+    if (remoteBackend && typeof remoteBackend === 'string' && !remoteBackend.includes('localhost') && !remoteBackend.includes('127.0.0.1')) {
+      try {
+        const remoteRes = await fetch(`${remoteBackend.replace(/\/$/, '')}/api/code/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, language: lang, stdin: stdinInput }),
+        });
+        if (remoteRes.ok) {
+          const remoteData = await remoteRes.json();
+          return NextResponse.json(remoteData);
+        }
+      } catch (remoteErr) {
+        console.error('[Remote Code Execution Forward Failed, falling back to local runner]', remoteErr);
+      }
+    }
 
     let status: ExecutionStatus = 'success';
     let stdout = '';
@@ -134,10 +171,20 @@ export async function POST(req: Request) {
 
     // ── Python ────────────────────────────────────────────────────────
     } else if (lang === 'python' || lang === 'py') {
+      const pythonCmd = runtimeAvailable('python3') ? 'python3' : runtimeAvailable('python') ? 'python' : null;
+      if (!pythonCmd) {
+        return NextResponse.json({
+          status: 'compiler_unavailable',
+          output: '',
+          stderr: 'Python interpreter (python3/python) is not installed on this server environment.',
+          executionTimeMs: Date.now() - startTime,
+          aiReview: '',
+        });
+      }
       const filePath = path.join(TEMP_DIR, `script_${fileId}.py`);
       try {
         fs.writeFileSync(filePath, code, 'utf-8');
-        const result = await execWithStdin(`python3 "${filePath}"`, execOptions(RUN_TIMEOUT_MS), stdinInput);
+        const result = await execWithStdin(`${pythonCmd} "${filePath}"`, execOptions(RUN_TIMEOUT_MS), stdinInput);
         stdout = result.stdout || '';
         stderr = result.stderr || '';
         status = 'success';
@@ -161,9 +208,9 @@ export async function POST(req: Request) {
         const compiler = getCppCompiler();
         if (!compiler) {
           return NextResponse.json({
-            status: 'execution_error',
+            status: 'compiler_unavailable',
             output: '',
-            stderr: 'No C++ compiler found on this server. Neither g++ nor clang++ is available.',
+            stderr: 'No C++ compiler found on this server. Neither g++ nor clang++ is installed in this environment.',
             executionTimeMs: Date.now() - startTime,
             aiReview: '',
           });
@@ -206,13 +253,14 @@ export async function POST(req: Request) {
       // Check Java runtime availability before attempting compilation
       if (!runtimeAvailable('javac') || !runtimeAvailable('java')) {
         return NextResponse.json({
-          status: 'execution_error',
+          status: 'compiler_unavailable',
           output: '',
-          stderr: 'Java runtime (javac/java) is not available on this server. Java execution is not supported in this environment.',
+          stderr: 'Java Development Kit (javac/java) is not installed or available on this server environment.',
           executionTimeMs: Date.now() - startTime,
           aiReview: '',
         });
       }
+
       const classNameMatch = code.match(/public\s+class\s+([A-Za-z0-9_]+)/);
       const className = classNameMatch ? classNameMatch[1] : 'Main';
       const javaDir = path.join(TEMP_DIR, `java_${fileId}`);

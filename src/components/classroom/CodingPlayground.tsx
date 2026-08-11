@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import { Play, Sparkles, Terminal, Code2, AlertTriangle, CheckCircle2, Clock, XCircle } from 'lucide-react';
 import { safeFetchJson } from '@/lib/utils';
 
-type ExecutionStatus = 'success' | 'compile_error' | 'runtime_error' | 'timeout' | 'execution_error' | null;
+type ExecutionStatus = 'success' | 'compile_error' | 'runtime_error' | 'timeout' | 'compiler_unavailable' | 'execution_error' | null;
 
 interface RunResult {
   status: ExecutionStatus;
@@ -13,6 +13,7 @@ interface RunResult {
   executionTimeMs: number;
   aiReview: string;
 }
+
 
 export const CodingPlayground: React.FC = () => {
   const [language, setLanguage] = useState<'javascript' | 'python' | 'cpp' | 'java'>('javascript');
@@ -84,12 +85,14 @@ export const CodingPlayground: React.FC = () => {
     NonNullable<ExecutionStatus>,
     { label: string; icon: React.ReactNode; color: string; outputColor: string }
   > = {
-    success:         { label: '✓ Success',       icon: <CheckCircle2 size={13} />, color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30', outputColor: 'text-emerald-300' },
-    compile_error:   { label: '⛔ Compile Error', icon: <XCircle size={13} />,     color: 'text-red-400 bg-red-500/10 border-red-500/30',             outputColor: 'text-red-300' },
-    runtime_error:   { label: '⚠ Runtime Error', icon: <AlertTriangle size={13} />,color: 'text-amber-400 bg-amber-500/10 border-amber-500/30',       outputColor: 'text-amber-300' },
-    timeout:         { label: '⏱ Timed Out',     icon: <Clock size={13} />,        color: 'text-orange-400 bg-orange-500/10 border-orange-500/30',    outputColor: 'text-orange-300' },
-    execution_error: { label: '✕ Error',          icon: <XCircle size={13} />,      color: 'text-red-400 bg-red-500/10 border-red-500/30',             outputColor: 'text-red-300' },
+    success:              { label: '✓ Success',               icon: <CheckCircle2 size={13} />, color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30', outputColor: 'text-emerald-300' },
+    compile_error:        { label: '⛔ Compile Error',        icon: <XCircle size={13} />,      color: 'text-red-400 bg-red-500/10 border-red-500/30',             outputColor: 'text-red-300' },
+    runtime_error:        { label: '⚠ Runtime Error',        icon: <AlertTriangle size={13} />,color: 'text-amber-400 bg-amber-500/10 border-amber-500/30',       outputColor: 'text-amber-300' },
+    timeout:              { label: '⏱ Timed Out',            icon: <Clock size={13} />,        color: 'text-orange-400 bg-orange-500/10 border-orange-500/30',    outputColor: 'text-orange-300' },
+    compiler_unavailable: { label: '⚙ Compiler Unavailable',  icon: <AlertTriangle size={13} />,color: 'text-amber-400 bg-amber-500/10 border-amber-500/30',       outputColor: 'text-amber-300' },
+    execution_error:      { label: '✕ Error',                 icon: <XCircle size={13} />,      color: 'text-red-400 bg-red-500/10 border-red-500/30',             outputColor: 'text-red-300' },
   };
+
 
   const currentStatus = result?.status ? statusConfig[result.status] : null;
 
