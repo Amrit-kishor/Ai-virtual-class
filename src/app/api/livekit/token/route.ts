@@ -52,29 +52,61 @@ export async function POST(req: Request) {
     const { roomCode: rawRoomCode, authToken: clientAuthToken, identity: clientIdentity, name: clientName } = parseResult.data;
     const roomCode = rawRoomCode.trim().toUpperCase();
 
-    // 1. Authenticate user using existing authentication system
-    let tokenFromCookie: string | undefined;
+    // 1. Authenticate user using existing authentication system (Cookie, Header, or verified body token)
+    let tokenToVerify: string | undefined;
+
+    // Check Next.js cookie store
     try {
       const cookieStore = await cookies();
-      tokenFromCookie = cookieStore.get('auth_token')?.value;
+      tokenToVerify = cookieStore.get('auth_token')?.value;
     } catch {
-      // Fallback for standalone/mock contexts or when cookies() is unavailable
-      const cookieHeader = req.headers.get('cookie');
-      if (cookieHeader) {
-        const match = cookieHeader.match(/auth_token=([^;]+)/);
-        if (match) tokenFromCookie = match[1];
+      // Non-blocking fallback for build or non-standard context
+    }
+
+    // Check raw Cookie header if cookieStore did not find it (crucial when proxied via Vercel rewrite or Express)
+    if (!tokenToVerify) {
+      const rawCookie = req.headers.get('cookie');
+      if (rawCookie) {
+        const match = rawCookie.match(/(?:^|;\s*)auth_token=([^;]+)/);
+        if (match) {
+          tokenToVerify = decodeURIComponent(match[1].trim());
+        }
       }
     }
-    const authHeader = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-    const tokenToVerify = tokenFromCookie || authHeader || clientAuthToken;
 
-
-    let authUser: TokenPayload | null = null;
-    if (tokenToVerify) {
-      authUser = verifyToken(tokenToVerify);
+    // Check Authorization header
+    if (!tokenToVerify) {
+      const authHeader = req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
+      if (authHeader) {
+        tokenToVerify = authHeader.trim();
+      }
     }
 
-    // In development/test mode, allow session fallback if valid identity is supplied
+    // Check custom x-auth-token header
+    if (!tokenToVerify) {
+      const xAuth = req.headers.get('x-auth-token');
+      if (xAuth) {
+        tokenToVerify = xAuth.trim();
+      }
+    }
+
+    // Check client-supplied body token as final fallback
+    if (!tokenToVerify && clientAuthToken) {
+      tokenToVerify = clientAuthToken.trim();
+    }
+
+    let authUser: TokenPayload | null = null;
+    let authFailureReason = '';
+
+    if (tokenToVerify) {
+      authUser = verifyToken(tokenToVerify);
+      if (!authUser) {
+        authFailureReason = 'JWT verification failed (invalid signature, malformed, or expired token)';
+      }
+    } else {
+      authFailureReason = 'Missing auth_token cookie, Authorization header, and body authToken';
+    }
+
     let userId: string;
     let userName: string;
     let userRole: 'TEACHER' | 'STUDENT' = 'STUDENT';
@@ -88,6 +120,10 @@ export async function POST(req: Request) {
       userName = clientName || 'Classroom Student';
       userRole = 'STUDENT';
     } else {
+      // Server-side audit log for authentication rejection (does not log tokens or secrets)
+      console.warn(
+        `[LiveKit Token 401 Unauthorized] clientIp=${clientIp} roomCode=${roomCode} reason="${authFailureReason}"`
+      );
       return NextResponse.json(
         { error: 'Unauthorized: Valid authentication token is required to access LiveKit video room.' },
         { status: 401 }
@@ -107,23 +143,28 @@ export async function POST(req: Request) {
 
     const roomInStore = roomStore.getRoom(roomCode);
     if (!classroomInDb && !roomInStore) {
+      console.warn(
+        `[LiveKit Token 404 Not Found] Classroom not found. clientIp=${clientIp} roomCode=${roomCode} userId=${userId}`
+      );
       return NextResponse.json(
         { error: 'Classroom not found. Please verify the classroom code.' },
         { status: 404 }
       );
     }
 
-    if (classroomInDb) {
-      if (classroomInDb.isEnded) {
-        return NextResponse.json(
-          { error: 'This classroom session has ended.' },
-          { status: 403 }
-        );
-      }
-      // Never trust frontend-supplied role: verify with classroom's actual teacher
-      if (classroomInDb.teacherId === userId) {
-        userRole = 'TEACHER';
-      }
+    if (classroomInDb?.isEnded || roomInStore?.isEnded) {
+      console.warn(
+        `[LiveKit Token 403 Forbidden] Classroom has ended. roomCode=${roomCode} userId=${userId}`
+      );
+      return NextResponse.json(
+        { error: 'This classroom session has ended.' },
+        { status: 403 }
+      );
+    }
+
+    // Verify authorized roles: Determine teacher status from DB or active room store
+    if (classroomInDb?.teacherId === userId || roomInStore?.teacherId === userId || authUser?.role === 'TEACHER') {
+      userRole = 'TEACHER';
     }
 
     // 3. Enforce maximum of 50 simultaneous participants per classroom
@@ -137,6 +178,9 @@ export async function POST(req: Request) {
       : false;
 
     if (!isAlreadyInRoom && activeParticipantsCount >= maxCapacity) {
+      console.warn(
+        `[LiveKit Token 403 Over Capacity] Room ${roomCode} at capacity (${activeParticipantsCount}/${maxCapacity})`
+      );
       return NextResponse.json(
         {
           error: `Classroom is at full capacity (Max ${maxCapacity} participants reached).`,

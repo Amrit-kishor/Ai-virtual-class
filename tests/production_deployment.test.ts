@@ -235,8 +235,8 @@ async function run() {
     }
   });
 
-  // 6. LiveKit Token Generation with Verified Classroom
-  await test('13. LiveKit Token generation succeeds when valid credentials are present', async () => {
+  // 6. LiveKit Token Generation with Verified Classroom via HttpOnly Cookie
+  await test('13. LiveKit Token generation succeeds via HttpOnly Cookie (no Authorization header)', async () => {
     process.env.LIVEKIT_API_KEY = 'valid_test_livekit_key_123';
     process.env.LIVEKIT_API_SECRET = 'valid_test_livekit_secret_at_least_32_chars_long!';
     process.env.LIVEKIT_URL = 'wss://ai-virtual-class.livekit.cloud';
@@ -245,7 +245,7 @@ async function run() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${authToken}`,
+        Cookie: `auth_token=${authToken}`,
       },
       body: JSON.stringify({
         roomCode: createdRoomCode,
@@ -258,10 +258,66 @@ async function run() {
     assert.ok(data.token, 'Must return signed LiveKit JWT token');
     assert.strictEqual(data.roomName, createdRoomCode);
     assert.strictEqual(data.serverUrl, 'wss://ai-virtual-class.livekit.cloud');
+    assert.strictEqual(data.participant.role, 'TEACHER');
   });
 
-  // 7. Strict Isolation Check: Personal AI Untouched
-  await test('14. Personal AI (studyWorkspaceAI.ts) remains completely untouched', async () => {
+  // 7. LiveKit Token Generation via short-lived socket token in body (fallback when cookies are dropped)
+  await test('14. LiveKit Token generation succeeds via body authToken (cross-domain fallback)', async () => {
+    const req = new Request('http://localhost:3000/api/livekit/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        roomCode: createdRoomCode,
+        authToken: socketToken,
+      }),
+    });
+
+    const res = await livekitTokenRoute(req);
+    assert.strictEqual(res.status, 200, `Expected status 200 but got ${res.status}`);
+    const data = await res.json();
+    assert.ok(data.token, 'Must return signed LiveKit JWT token');
+    assert.strictEqual(data.roomName, createdRoomCode);
+  });
+
+  // 8. LiveKit Token rejects unauthenticated request (401)
+  await test('15. LiveKit Token generation returns 401 when no authentication token is provided', async () => {
+    const req = new Request('http://localhost:3000/api/livekit/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        roomCode: createdRoomCode,
+      }),
+    });
+
+    const res = await livekitTokenRoute(req);
+    assert.strictEqual(res.status, 401, `Expected status 401 but got ${res.status}`);
+    const data = await res.json();
+    assert.ok(data.error.includes('Unauthorized'));
+  });
+
+  // 9. LiveKit Token rejects invalid/expired token (401)
+  await test('16. LiveKit Token generation returns 401 when invalid token is provided', async () => {
+    const req = new Request('http://localhost:3000/api/livekit/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer invalid.tampered.token',
+      },
+      body: JSON.stringify({
+        roomCode: createdRoomCode,
+      }),
+    });
+
+    const res = await livekitTokenRoute(req);
+    assert.strictEqual(res.status, 401, `Expected status 401 but got ${res.status}`);
+  });
+
+  // 10. Strict Isolation Check: Personal AI Untouched
+  await test('17. Personal AI (studyWorkspaceAI.ts) remains completely untouched', async () => {
     const personalAiModule = await import('../src/lib/ai/studyWorkspaceAI');
     assert.ok(personalAiModule, 'studyWorkspaceAI module must exist');
     assert.strictEqual(typeof personalAiModule.answerFromSources, 'function');

@@ -384,13 +384,23 @@ export default function ClassroomPage() {
         return;
       }
       try {
+        // Retrieve fresh short-lived socket token to pass as Bearer header in case proxy drops cookies
+        const socketToken = await fetchSocketToken();
+
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (socketToken) {
+          headers['Authorization'] = `Bearer ${socketToken}`;
+        }
+
         const res = await safeFetchJson<{ serverUrl: string; token: string; roomName: string }>('/api/livekit/token', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
+          credentials: 'include',
           body: JSON.stringify({
             roomCode: code,
             identity: currentSession.id,
             name: currentSession.name,
+            authToken: socketToken || undefined,
           }),
         });
 
@@ -410,6 +420,37 @@ export default function ClassroomPage() {
           });
           peerConnectionsRef.current.clear();
           pendingCandidatesRef.current.clear();
+        } else if (res.status === 401) {
+          // If first request returned 401, retry once with fresh authentication token
+          console.warn('[LiveKit Token 401] Initial authorization failed. Requesting fresh socket token and retrying...');
+          const freshToken = await fetchSocketToken();
+          if (freshToken) {
+            const retryRes = await safeFetchJson<{ serverUrl: string; token: string; roomName: string }>('/api/livekit/token', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${freshToken}`,
+              },
+              credentials: 'include',
+              body: JSON.stringify({
+                roomCode: code,
+                identity: currentSession.id,
+                name: currentSession.name,
+                authToken: freshToken,
+              }),
+            });
+
+            if (retryRes.ok && retryRes.data?.token) {
+              setLivekitToken(retryRes.data.token);
+              setLivekitServerUrl(retryRes.data.serverUrl);
+              setIsUsingLiveKit(true);
+              isUsingLiveKitRef.current = true;
+            } else {
+              console.error('[LiveKit Token Retry Failed]', retryRes.error);
+            }
+          }
+        } else {
+          console.warn('[LiveKit Token Response]', res.error || `Status ${res.status}`);
         }
       } catch (err) {
         console.warn('[LiveKit Token Error] Falling back to WebRTC mesh:', err);

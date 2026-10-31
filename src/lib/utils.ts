@@ -10,7 +10,11 @@ export async function safeFetchJson<T = unknown>(
         headers.set('Authorization', `Bearer ${token}`);
       }
     }
-    const res = await fetch(url, { ...options, headers });
+    const res = await fetch(url, {
+      credentials: options?.credentials || 'include',
+      ...options,
+      headers,
+    });
     const contentType = res.headers.get('content-type') || '';
 
     if (contentType.includes('application/json')) {
