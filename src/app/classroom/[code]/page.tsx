@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { getSocket } from '@/lib/socket';
+import { getSocket, fetchSocketToken } from '@/lib/socket';
 import { getLiveUserMediaStream, getWebRTCConfiguration, createAudioActivityDetector } from '@/lib/media';
 import { safeFetchJson } from '@/lib/utils';
 import {
@@ -353,13 +353,30 @@ export default function ClassroomPage() {
 
     const socket = getSocket();
 
-    // Join socket room
-    socket.emit('join-room', {
+    const joinRoomPayload = {
       roomCode,
       userId: currentUserSession.id,
       name: currentUserSession.name,
       role: currentUserSession.role,
+    };
+
+    const emitJoin = () => {
+      socket.emit('join-room', joinRoomPayload);
+    };
+
+    // Obtain short-lived socket token from backend and connect safely
+    fetchSocketToken().then((st) => {
+      if (st) {
+        getSocket(st);
+      } else {
+        socket.connect();
+      }
+      if (socket.connected) {
+        emitJoin();
+      }
     });
+
+    socket.on('connect', emitJoin);
 
     // Request LiveKit SFU Token for 50-Participant Video Conferencing
     const fetchLiveKitToken = async (code: string, currentSession: { id: string; name: string; role: string }) => {
@@ -660,6 +677,7 @@ export default function ClassroomPage() {
       clearTimeout(t1);
       clearTimeout(t2);
       clearTimeout(t3);
+      socket.off('connect', emitJoin);
       socket.off('room-joined');
       socket.off('user-joined');
       socket.off('user-left');

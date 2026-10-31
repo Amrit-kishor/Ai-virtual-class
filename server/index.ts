@@ -97,21 +97,38 @@ app.prepare().then(() => {
   // 4. Socket Authentication Middleware (JWT Validation Before Connection)
   io.use((socket: Socket, nextMiddleware) => {
     try {
-      const token =
+      let token =
         socket.handshake.auth?.token ||
-        socket.handshake.headers?.authorization?.replace('Bearer ', '');
+        socket.handshake.headers?.authorization?.replace(/^Bearer\s+/i, '');
+
+      // Secondary fallback: Extract auth_token from handshake cookie header if present
+      if (!token && socket.handshake.headers?.cookie) {
+        const match = socket.handshake.headers.cookie.match(/auth_token=([^;]+)/);
+        if (match) {
+          token = match[1];
+        }
+      }
 
       if (!token) {
-        logger.warn({ socketId: socket.id }, 'Socket connection attempt rejected: Missing JWT token');
+        logger.warn(
+          { socketId: socket.id, address: socket.handshake.address },
+          'Socket connection rejected: Missing JWT authentication token'
+        );
         return nextMiddleware(new Error('Authentication Error: Missing Token'));
       }
 
       const decoded = jwt.verify(token, env.JWT_SECRET) as TokenPayload;
       socket.data.user = decoded;
-      logger.info({ socketId: socket.id, userId: decoded.userId, name: decoded.name }, 'Socket authenticated');
+      logger.info(
+        { socketId: socket.id, userId: decoded.userId, name: decoded.name, role: decoded.role },
+        'Socket connection successfully authenticated'
+      );
       nextMiddleware();
     } catch (err: unknown) {
-      logger.warn({ socketId: socket.id, err }, 'Socket authentication failed: Invalid JWT');
+      logger.warn(
+        { socketId: socket.id, err: err instanceof Error ? err.message : String(err) },
+        'Socket connection rejected: Invalid or expired JWT token'
+      );
       nextMiddleware(new Error('Authentication Error: Invalid Token'));
     }
   });
@@ -612,36 +629,44 @@ app.prepare().then(() => {
   // Centralized Error Middleware
   serverApp.use(errorHandler);
 
-  // Dynamic Free Port Binder
-  const findOpenPort = (startPort: number): Promise<number> => {
-    return new Promise((resolve) => {
-      const tempServer = http.createServer();
-      tempServer.listen(startPort, () => {
-        tempServer.close(() => resolve(startPort));
-      });
-      tempServer.on('error', () => {
-        resolve(findOpenPort(startPort + 1));
-      });
+  // Server Port & Host Binding: Bind directly to process.env.PORT on 0.0.0.0 for Render/Production
+  const startServer = (bindPort: number) => {
+    server.listen(bindPort, '0.0.0.0', () => {
+      const lanIp = getLanIpAddress();
+      logger.info(
+        { port: bindPort, env: env.NODE_ENV },
+        `🚀 AI Virtual Classroom Production Server running on port ${bindPort} (0.0.0.0)`
+      );
+      // eslint-disable-next-line no-console
+      console.log(`\n  Local:    http://localhost:${bindPort}`);
+      if (lanIp) {
+        // eslint-disable-next-line no-console
+        console.log(`  Network:  http://${lanIp}:${bindPort}`);
+        // eslint-disable-next-line no-console
+        console.log(`\n  For mobile/LAN testing, set NEXT_PUBLIC_SOCKET_URL=http://${lanIp}:${bindPort} in .env\n`);
+      }
     });
   };
 
-  findOpenPort(PORT).then((actualPort) => {
-    // Bind explicitly to 0.0.0.0 so the server is reachable from other devices
-    // on the same LAN (e.g. testing the classroom from a phone), not just localhost.
-    server.listen(actualPort, '0.0.0.0', () => {
-      const lanIp = getLanIpAddress();
-      logger.info(
-        { port: actualPort, env: env.NODE_ENV },
-        `🚀 AI Virtual Classroom Production Server running`
-      );
-      // eslint-disable-next-line no-console
-      console.log(`\n  Local:    http://localhost:${actualPort}`);
-      if (lanIp) {
-        // eslint-disable-next-line no-console
-        console.log(`  Network:  http://${lanIp}:${actualPort}`);
-        // eslint-disable-next-line no-console
-        console.log(`\n  For mobile/LAN testing, set NEXT_PUBLIC_SOCKET_URL=http://${lanIp}:${actualPort} in .env\n`);
-      }
+  if (process.env.PORT || env.NODE_ENV === 'production') {
+    const bindPort = Number(process.env.PORT) || Number(PORT);
+    startServer(bindPort);
+  } else {
+    // Dynamic Free Port Finder for local development convenience
+    const findOpenPort = (startPort: number): Promise<number> => {
+      return new Promise((resolve) => {
+        const tempServer = http.createServer();
+        tempServer.listen(startPort, () => {
+          tempServer.close(() => resolve(startPort));
+        });
+        tempServer.on('error', () => {
+          resolve(findOpenPort(startPort + 1));
+        });
+      });
+    };
+
+    findOpenPort(PORT).then((actualPort) => {
+      startServer(actualPort);
     });
-  });
+  }
 });

@@ -5,9 +5,11 @@ import { POST as loginRoute } from '../src/app/api/auth/login/route';
 import { POST as signupRoute } from '../src/app/api/auth/signup/route';
 import { POST as logoutRoute } from '../src/app/api/auth/logout/route';
 import { GET as meRoute } from '../src/app/api/auth/me/route';
+import { POST as socketTokenRoute } from '../src/app/api/auth/socket-token/route';
 import { POST as livekitTokenRoute } from '../src/app/api/livekit/token/route';
 import { POST as createClassroomRoute } from '../src/app/api/classroom/create/route';
 import { corsOptions } from '../server/security';
+import { verifyToken } from '../src/lib/auth';
 import nextConfig from '../next.config';
 import assert from 'assert';
 
@@ -138,7 +140,39 @@ async function run() {
     assert.strictEqual(data.user.email, testEmail);
   });
 
-  await test('8. Logout (POST /api/auth/logout) cleanly invalidates session cookie', async () => {
+  await test('8. Socket.IO Token Endpoint rejects unauthenticated requests (401)', async () => {
+    const req = new Request('http://localhost:3000/api/auth/socket-token', {
+      method: 'POST',
+    });
+
+    const res = await socketTokenRoute(req);
+    assert.strictEqual(res.status, 401, `Expected status 401 but got ${res.status}`);
+  });
+
+  let socketToken = '';
+  await test('9. Socket.IO Token Endpoint generates valid short-lived token for authenticated user (200)', async () => {
+    const req = new Request('http://localhost:3000/api/auth/socket-token', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+      },
+    });
+
+    const res = await socketTokenRoute(req);
+    assert.strictEqual(res.status, 200, `Expected status 200 but got ${res.status}`);
+    const data = await res.json();
+    assert.ok(data.socketToken, 'Response must include socketToken');
+    assert.strictEqual(data.expiresIn, 600, 'Token must expire in 600 seconds');
+    socketToken = data.socketToken;
+
+    // Verify socketToken payload
+    const decoded = verifyToken(socketToken);
+    assert.ok(decoded, 'socketToken must be verifiable with server secret');
+    assert.strictEqual(decoded.email, testEmail);
+    assert.strictEqual(decoded.role, 'TEACHER');
+  });
+
+  await test('10. Logout (POST /api/auth/logout) cleanly invalidates session cookie', async () => {
     const res = await logoutRoute();
     assert.strictEqual(res.status, 200);
     const data = await res.json();
@@ -147,7 +181,7 @@ async function run() {
 
   // 4. Classroom Creation with Auth
   let createdRoomCode = '';
-  await test('9. Classroom creation (POST /api/classroom/create) functions with token', async () => {
+  await test('11. Classroom creation (POST /api/classroom/create) functions with token', async () => {
     const req = new Request('http://localhost:3000/api/classroom/create', {
       method: 'POST',
       headers: {
@@ -170,11 +204,42 @@ async function run() {
     createdRoomCode = data.classroom.roomCode;
   });
 
-  // 5. LiveKit Token Generation with Verified Classroom
-  await test('10. LiveKit Token generation succeeds for created classroom', async () => {
-    process.env.LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || 'devkey';
-    process.env.LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || 'secret_dev_key_must_be_32_characters_long_12345';
-    process.env.LIVEKIT_URL = process.env.LIVEKIT_URL || 'wss://test-project.livekit.cloud';
+  // 5. LiveKit Incomplete Configuration Rejection (HTTP 503)
+  await test('12. LiveKit Token generation returns HTTP 503 if credentials are missing', async () => {
+    const savedKey = process.env.LIVEKIT_API_KEY;
+    const savedSecret = process.env.LIVEKIT_API_SECRET;
+    const savedUrl = process.env.LIVEKIT_URL;
+
+    try {
+      delete process.env.LIVEKIT_API_KEY;
+      delete process.env.LIVEKIT_API_SECRET;
+      delete process.env.LIVEKIT_URL;
+
+      const req = new Request('http://localhost:3000/api/livekit/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ roomCode: createdRoomCode }),
+      });
+
+      const res = await livekitTokenRoute(req);
+      assert.strictEqual(res.status, 503, `Expected status 503 but got ${res.status}`);
+      const data = await res.json();
+      assert.strictEqual(data.error, 'LiveKit server configuration is incomplete');
+    } finally {
+      process.env.LIVEKIT_API_KEY = savedKey;
+      process.env.LIVEKIT_API_SECRET = savedSecret;
+      process.env.LIVEKIT_URL = savedUrl;
+    }
+  });
+
+  // 6. LiveKit Token Generation with Verified Classroom
+  await test('13. LiveKit Token generation succeeds when valid credentials are present', async () => {
+    process.env.LIVEKIT_API_KEY = 'valid_test_livekit_key_123';
+    process.env.LIVEKIT_API_SECRET = 'valid_test_livekit_secret_at_least_32_chars_long!';
+    process.env.LIVEKIT_URL = 'wss://ai-virtual-class.livekit.cloud';
 
     const req = new Request('http://localhost:3000/api/livekit/token', {
       method: 'POST',
@@ -192,10 +257,11 @@ async function run() {
     const data = await res.json();
     assert.ok(data.token, 'Must return signed LiveKit JWT token');
     assert.strictEqual(data.roomName, createdRoomCode);
+    assert.strictEqual(data.serverUrl, 'wss://ai-virtual-class.livekit.cloud');
   });
 
-  // 6. Strict Isolation Check: Personal AI Untouched
-  await test('11. Personal AI (studyWorkspaceAI.ts) remains completely untouched', async () => {
+  // 7. Strict Isolation Check: Personal AI Untouched
+  await test('14. Personal AI (studyWorkspaceAI.ts) remains completely untouched', async () => {
     const personalAiModule = await import('../src/lib/ai/studyWorkspaceAI');
     assert.ok(personalAiModule, 'studyWorkspaceAI module must exist');
     assert.strictEqual(typeof personalAiModule.answerFromSources, 'function');

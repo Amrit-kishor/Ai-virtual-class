@@ -20,12 +20,19 @@ export const corsOptions: CorsOptions = {
     // Allow requests with no origin (like mobile apps, curl, server-to-server)
     if (!origin) return callback(null, true);
     const normalizedOrigin = origin.replace(/\/$/, '');
+
+    const envOrigins = [process.env.FRONTEND_URL, process.env.NEXT_PUBLIC_FRONTEND_URL]
+      .filter(Boolean)
+      .flatMap((u) => (u as string).split(','))
+      .map((u) => u.trim().replace(/\/$/, ''))
+      .filter(Boolean);
+
     const isAllowed =
       allowedOrigins.some((allowed) => allowed.replace(/\/$/, '') === normalizedOrigin) ||
-      (process.env.FRONTEND_URL && process.env.FRONTEND_URL.replace(/\/$/, '') === normalizedOrigin) ||
-      (process.env.NEXT_PUBLIC_FRONTEND_URL && process.env.NEXT_PUBLIC_FRONTEND_URL.replace(/\/$/, '') === normalizedOrigin) ||
+      envOrigins.includes(normalizedOrigin) ||
       process.env.NODE_ENV === 'development' ||
-      normalizedOrigin.endsWith('.vercel.app');
+      normalizedOrigin.endsWith('.vercel.app') ||
+      /^https:\/\/[a-zA-Z0-9_-]+\.vercel\.app$/.test(normalizedOrigin);
 
     if (isAllowed) {
       return callback(null, true);
@@ -37,7 +44,7 @@ export const corsOptions: CorsOptions = {
 
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'Cookie'],
 };
 
 export const corsMiddleware = cors(corsOptions);

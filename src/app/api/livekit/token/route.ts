@@ -150,28 +150,19 @@ export async function POST(req: Request) {
     // 4. Retrieve LiveKit credentials from backend environment
     const apiKey = process.env.LIVEKIT_API_KEY;
     const apiSecret = process.env.LIVEKIT_API_SECRET;
-    const serverUrl =
-      process.env.LIVEKIT_URL ||
-      process.env.NEXT_PUBLIC_LIVEKIT_URL ||
-      'wss://demo.livekit.cloud';
+    const serverUrl = process.env.LIVEKIT_URL;
 
-    if (!apiKey || !apiSecret || apiKey === 'devkey' || !process.env.LIVEKIT_URL) {
-      // In local dev without live LiveKit Cloud credentials, return clear info for fallback
-      if (process.env.NODE_ENV !== 'production' && (!apiKey || !apiSecret)) {
-        return NextResponse.json(
-          {
-            error: 'LIVEKIT_CREDENTIALS_MISSING',
-            message: 'LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be configured in .env',
-            fallbackToMesh: true,
-          },
-          { status: 503 }
-        );
-      }
+    // Strict validation: Reject if any required LiveKit configuration variable is missing
+    if (!apiKey || !apiSecret || !serverUrl) {
+      return NextResponse.json(
+        { error: 'LiveKit server configuration is incomplete' },
+        { status: 503 }
+      );
     }
 
     // 5. Generate short-lived LiveKit JWT token (1 hour TTL)
     const isTeacher = userRole === 'TEACHER';
-    const at = new AccessToken(apiKey || 'devkey', apiSecret || 'secret', {
+    const at = new AccessToken(apiKey, apiSecret, {
       identity: userId,
       name: userName,
       ttl: '1h',
