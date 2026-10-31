@@ -123,8 +123,14 @@ export default function DashboardPage() {
           </div>
 
           <button
-            onClick={() => {
+            onClick={async () => {
+              try {
+                await safeFetchJson('/api/auth/logout', { method: 'POST' });
+              } catch {
+                // Non-blocking logout fallback
+              }
               localStorage.removeItem('user_session');
+              localStorage.removeItem('auth_token');
               router.push('/login');
             }}
             className="text-xs text-slate-400 hover:text-rose-400 font-semibold px-2.5 py-1.5 rounded-lg border border-white/5 hover:border-rose-500/30 transition"

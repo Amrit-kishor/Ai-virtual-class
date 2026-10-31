@@ -20,6 +20,7 @@ const envSchema = z.object({
   LIVEKIT_API_SECRET: z.string().optional(),
   NEXT_PUBLIC_LIVEKIT_ENABLED: z.string().optional(),
   NEXT_PUBLIC_LIVEKIT_URL: z.string().optional(),
+  BACKEND_URL: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

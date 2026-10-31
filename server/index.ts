@@ -65,6 +65,15 @@ app.prepare().then(() => {
   // Security Middlewares
   serverApp.use(helmetMiddleware);
   serverApp.use(corsMiddleware);
+  serverApp.options('*', corsMiddleware);
+
+  // Production Health Check Endpoints (for Render health monitoring)
+  serverApp.get('/health', (_req, res) => {
+    res.status(200).json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
+  });
+  serverApp.get('/api/health', (_req, res) => {
+    res.status(200).json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
+  });
 
   // Rate Limiters on REST API endpoints
   serverApp.use('/api/', apiRateLimiter);

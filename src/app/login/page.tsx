@@ -43,6 +43,9 @@ function LoginContent() {
 
       // Store in localStorage for instant access
       localStorage.setItem('user_session', JSON.stringify(result.data.user));
+      if (result.data.token) {
+        localStorage.setItem('auth_token', result.data.token);
+      }
       router.push('/dashboard');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Authentication error';

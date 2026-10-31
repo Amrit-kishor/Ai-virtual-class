@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { CreateRoomSchema } from '../../../../../server/validators';
 
+import { getAuthUser } from '@/lib/apiAuth';
+import { roomStore } from '../../../../../server/roomStore';
+
 function generateRoomCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
@@ -26,6 +29,26 @@ export async function POST(req: Request) {
     const { title, maxParticipants } = parseResult.data;
     const roomCode = generateRoomCode();
 
+    const user = await getAuthUser(req);
+    const teacherId = user?.userId || 'usr_teacher_1';
+
+    // Ensure teacher exists in User table to satisfy DB foreign key constraint
+    try {
+      await prisma.user.upsert({
+        where: { id: teacherId },
+        update: {},
+        create: {
+          id: teacherId,
+          email: user?.email || `${teacherId}@classroom.ai`,
+          name: user?.name || 'Classroom Teacher',
+          passwordHash: 'auth_session_hash',
+          role: 'TEACHER',
+        },
+      });
+    } catch {
+      // Non-blocking fallback
+    }
+
     let classroom;
     try {
       classroom = await prisma.classroom.create({
@@ -34,7 +57,7 @@ export async function POST(req: Request) {
           title,
           description: 'Interactive Real-Time Virtual Studio',
           maxParticipants,
-          teacherId: 'usr_teacher_1',
+          teacherId,
         },
       });
     } catch (dbError: unknown) {
@@ -44,11 +67,14 @@ export async function POST(req: Request) {
         title,
         description: 'Interactive Real-Time Virtual Studio',
         maxParticipants,
-        teacherId: 'usr_teacher_1',
+        teacherId,
         isEnded: false,
         createdAt: new Date(),
       };
     }
+
+    // Register active room in roomStore immediately
+    await roomStore.getOrCreateRoom(roomCode, teacherId);
 
     return NextResponse.json({ classroom });
   } catch (error: unknown) {

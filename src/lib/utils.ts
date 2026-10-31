@@ -3,7 +3,14 @@ export async function safeFetchJson<T = unknown>(
   options?: RequestInit
 ): Promise<{ ok: boolean; status: number; data?: T; error?: string }> {
   try {
-    const res = await fetch(url, options);
+    const headers = new Headers(options?.headers || {});
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('auth_token');
+      if (token && !headers.has('Authorization')) {
+        headers.set('Authorization', `Bearer ${token}`);
+      }
+    }
+    const res = await fetch(url, { ...options, headers });
     const contentType = res.headers.get('content-type') || '';
 
     if (contentType.includes('application/json')) {

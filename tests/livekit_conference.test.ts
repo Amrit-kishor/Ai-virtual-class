@@ -450,16 +450,19 @@ async function main() {
   await runTest('16. Socket.IO Chat and Whiteboard features remain operational', async () => {
     room.chatMessages.push({
       id: 'chat_1',
-      sender: 'Teacher',
-      text: 'Welcome to the 50-participant lecture',
+      senderId: testTeacherId,
+      senderName: 'Dr. Test Teacher',
+      senderRole: 'TEACHER',
+      content: 'Welcome to the 50-participant lecture',
       timestamp: Date.now(),
-      role: 'TEACHER',
     });
     assert.strictEqual(room.chatMessages.length, 1);
 
     room.whiteboardElements.push({
       id: 'wb_1',
       type: 'pen',
+      x: 10,
+      y: 10,
       points: [{ x: 10, y: 10 }, { x: 20, y: 20 }],
       color: '#4F46E5',
       strokeWidth: 3,
