@@ -191,10 +191,41 @@ export async function POST(req: Request) {
       );
     }
 
-    // 4. Retrieve LiveKit credentials from backend environment
+    // 4. Retrieve LiveKit credentials from environment
     const apiKey = process.env.LIVEKIT_API_KEY;
     const apiSecret = process.env.LIVEKIT_API_SECRET;
     const serverUrl = process.env.LIVEKIT_URL;
+
+    // If local LiveKit credentials are not configured on Vercel, proxy to Render while securely forwarding incoming Cookie & Authorization headers
+    if ((!apiKey || !apiSecret || !serverUrl) && process.env.BACKEND_URL) {
+      const cleanBackend = process.env.BACKEND_URL.replace(/\/$/, '');
+      try {
+        const proxyHeaders = new Headers();
+        proxyHeaders.set('Content-Type', 'application/json');
+
+        const incomingCookie = req.headers.get('cookie');
+        if (incomingCookie) {
+          proxyHeaders.set('Cookie', incomingCookie);
+        }
+        const incomingAuth = req.headers.get('authorization');
+        if (incomingAuth) {
+          proxyHeaders.set('Authorization', incomingAuth);
+        }
+
+        const proxyRes = await fetch(`${cleanBackend}/api/livekit/token`, {
+          method: 'POST',
+          headers: proxyHeaders,
+          body: JSON.stringify(body),
+        });
+
+        if (proxyRes.ok) {
+          const proxyData = await proxyRes.json();
+          return NextResponse.json(proxyData, { status: 200 });
+        }
+      } catch (err: unknown) {
+        console.error('[LiveKit Token Proxy to Render Error]', err);
+      }
+    }
 
     // Strict validation: Reject if any required LiveKit configuration variable is missing
     if (!apiKey || !apiSecret || !serverUrl) {

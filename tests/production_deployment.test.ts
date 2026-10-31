@@ -46,14 +46,16 @@ async function run() {
     assert.deepStrictEqual(rewrites, [], 'When BACKEND_URL is unset, rewrites must be empty');
   });
 
-  await test('2. next.config.ts rewrites forward /api/* to BACKEND_URL in beforeFiles when configured', async () => {
+  await test('2. next.config.ts rewrites forward unmatched /api/* in fallback (preserving existing Next.js API routes)', async () => {
     process.env.BACKEND_URL = 'https://ai-virtual-class.onrender.com';
     const rewritesFn = (nextConfig as any).rewrites;
     const rewrites = await rewritesFn();
-    assert.ok(rewrites.beforeFiles, 'rewrites must have beforeFiles array');
-    const apiRule = rewrites.beforeFiles.find((r: any) => r.source === '/api/:path*');
-    assert.ok(apiRule, 'Must contain rewrite rule for /api/:path*');
+    assert.ok(rewrites.fallback, 'rewrites must have fallback array to avoid shadowing existing routes');
+    assert.strictEqual(rewrites.beforeFiles.length, 0, 'beforeFiles must be empty so local Next.js API routes are preserved');
+    const apiRule = rewrites.fallback.find((r: any) => r.source === '/api/:path*');
+    assert.ok(apiRule, 'Must contain fallback rewrite rule for /api/:path*');
     assert.strictEqual(apiRule.destination, 'https://ai-virtual-class.onrender.com/api/:path*');
+    delete process.env.BACKEND_URL;
   });
 
   // 2. CORS Allowlist Policy Tests

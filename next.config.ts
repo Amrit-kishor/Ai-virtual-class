@@ -13,15 +13,17 @@ const nextConfig: NextConfig = {
 
     const cleanBackendUrl = backendUrl.replace(/\/$/, "");
 
+    // Preserve existing Next.js API routes locally on Vercel.
+    // Unmatched API requests fallback to the Render backend server.
     return {
-      beforeFiles: [
+      beforeFiles: [],
+      afterFiles: [],
+      fallback: [
         {
           source: "/api/:path*",
           destination: `${cleanBackendUrl}/api/:path*`,
         },
       ],
-      afterFiles: [],
-      fallback: [],
     };
   },
 };
