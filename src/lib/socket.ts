@@ -3,39 +3,58 @@ import { safeFetchJson } from './utils';
 
 let socket: Socket | null = null;
 let currentSocketToken: string | null = null;
+let tokenExpiresAt = 0;
 let isRefreshingToken = false;
+let socketTokenPromise: Promise<string | null> | null = null;
 
 /**
  * Request a short-lived (10-minute) Socket.IO authentication token from the backend.
- * Uses the browser's HTTP-only session cookie automatically via the Vercel-to-Render proxy.
+ * Uses the browser's HTTP-only session cookie automatically via same-origin credentials.
+ * Deduplicates in-flight requests to avoid redundant calls.
  */
 export async function fetchSocketToken(): Promise<string | null> {
-  try {
-    const res = await safeFetchJson<{ socketToken: string; expiresIn: number }>('/api/auth/socket-token', {
-      method: 'POST',
-    });
-
-    if (res.ok && res.data?.socketToken) {
-      currentSocketToken = res.data.socketToken;
-      return res.data.socketToken;
-    }
-
-    if (res.status === 401) {
-      console.warn('[Socket Auth] User session missing or unauthenticated. Cannot obtain socket token.');
-    }
-  } catch (err) {
-    if (process.env.NODE_ENV !== 'production') {
-      console.warn('[Socket Auth] Error fetching short-lived socket token:', err);
-    }
+  if (socketTokenPromise) {
+    return socketTokenPromise;
   }
-  return null;
+
+  socketTokenPromise = (async () => {
+    try {
+      const res = await safeFetchJson<{ socketToken: string; expiresIn: number }>('/api/auth/socket-token', {
+        method: 'POST',
+      });
+
+      if (res.ok && res.data?.socketToken) {
+        currentSocketToken = res.data.socketToken;
+        const expiresIn = typeof res.data.expiresIn === 'number' ? res.data.expiresIn : 600;
+        // Expire 30 seconds before official expiration to prevent edge-case race conditions
+        tokenExpiresAt = Date.now() + Math.max(30, expiresIn - 30) * 1000;
+        return res.data.socketToken;
+      }
+
+      if (res.status === 401) {
+        currentSocketToken = null;
+        tokenExpiresAt = 0;
+        console.warn('[Socket Auth] User session missing or unauthenticated. Cannot obtain socket token.');
+      }
+    } catch (err) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[Socket Auth] Error fetching short-lived socket token:', err);
+      }
+    } finally {
+      socketTokenPromise = null;
+    }
+    return null;
+  })();
+
+  return socketTokenPromise;
 }
 
 /**
  * Sets or updates the socket authentication token in memory.
  */
-export function setSocketAuthToken(token: string): void {
+export function setSocketAuthToken(token: string, expiresInSeconds: number = 600): void {
   currentSocketToken = token;
+  tokenExpiresAt = Date.now() + Math.max(30, expiresInSeconds - 30) * 1000;
   if (socket) {
     socket.auth = { token };
     if (!socket.connected) {
@@ -47,10 +66,12 @@ export function setSocketAuthToken(token: string): void {
 /**
  * Returns the singleton Socket.IO client instance configured for the Render backend.
  * Does NOT depend on localStorage for authentication tokens.
+ * Prevents duplicate Socket.IO connections.
  */
 export function getSocket(explicitToken?: string): Socket {
   if (explicitToken) {
     currentSocketToken = explicitToken;
+    tokenExpiresAt = Date.now() + 570 * 1000;
   }
 
   const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || '';
@@ -61,11 +82,12 @@ export function getSocket(explicitToken?: string): Socket {
       autoConnect: false, // Explicit connection once token is available
       withCredentials: true,
       auth: (cb) => {
-        // Socket.IO dynamic auth callback: provides the latest token on every connection/reconnection
-        if (currentSocketToken) {
+        // Socket.IO dynamic auth callback: provides the latest valid token on every connection/reconnection
+        const isTokenValid = currentSocketToken && Date.now() < tokenExpiresAt;
+        if (isTokenValid && currentSocketToken) {
           cb({ token: currentSocketToken });
         } else {
-          // If no token is cached in memory, fetch one dynamically
+          // Fetch a fresh token dynamically
           fetchSocketToken()
             .then((newToken) => {
               if (newToken) {
@@ -104,9 +126,10 @@ export function getSocket(explicitToken?: string): Socket {
         isRefreshingToken = true;
         try {
           console.info('[Socket.IO] Authentication token expired or invalid. Requesting fresh token...');
+          currentSocketToken = null;
+          tokenExpiresAt = 0;
           const freshToken = await fetchSocketToken();
           if (freshToken && socket) {
-            currentSocketToken = freshToken;
             socket.auth = { token: freshToken };
             socket.connect();
           }
@@ -144,5 +167,7 @@ export function disconnectSocket(): void {
     socket.disconnect();
     socket = null;
     currentSocketToken = null;
+    tokenExpiresAt = 0;
   }
 }
+

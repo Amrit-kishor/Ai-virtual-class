@@ -41,11 +41,8 @@ function LoginContent() {
         throw new Error(result.error || 'Authentication failed');
       }
 
-      // Store in localStorage for instant access
+      // Store user profile in localStorage for UI display; token is securely stored in HttpOnly cookie
       localStorage.setItem('user_session', JSON.stringify(result.data.user));
-      if (result.data.token) {
-        localStorage.setItem('auth_token', result.data.token);
-      }
       router.push('/dashboard');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Authentication error';
@@ -67,9 +64,6 @@ function LoginContent() {
 
       if (result.ok && result.data) {
         localStorage.setItem('user_session', JSON.stringify(result.data.user));
-        if (result.data.token) {
-          localStorage.setItem('auth_token', result.data.token);
-        }
         router.push('/dashboard');
       } else {
         throw new Error(result.error || 'Social authentication failed');

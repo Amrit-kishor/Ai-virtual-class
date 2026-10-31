@@ -77,7 +77,8 @@ app.prepare().then(() => {
 
   // Rate Limiters on REST API endpoints
   serverApp.use('/api/', apiRateLimiter);
-  serverApp.use('/api/auth/', authRateLimiter);
+  serverApp.use('/api/auth/login', authRateLimiter);
+  serverApp.use('/api/auth/signup', authRateLimiter);
 
   const server = http.createServer(serverApp);
 
@@ -116,6 +117,8 @@ app.prepare().then(() => {
         );
         return nextMiddleware(new Error('Authentication Error: Missing Token'));
       }
+
+      token = token.replace(/^["']|["']$/g, '').trim();
 
       const decoded = jwt.verify(token, env.JWT_SECRET) as TokenPayload;
       socket.data.user = decoded;

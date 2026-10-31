@@ -15,7 +15,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "test": "tsx tests/livekit_conference.test.ts && tsx tests/production_deployment.test.ts",
     "test:livekit": "tsx tests/livekit_conference.test.ts",
-    "test:deployment": "tsx tests/production_deployment.test.ts"
+    "test:deployment": "tsx tests/production_deployment.test.ts",
+    "test:production": "tsx tests/production_live_verification.ts"
   },
   "dependencies": {
     "@livekit/components-react": "^2.9.24",

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getAuthUser } from '@/lib/apiAuth';
+import { extractAuthSession } from '@/lib/apiAuth';
 import { generateToken } from '@/lib/auth';
 
 // Rate limiter: 60 socket-token requests per minute per IP
@@ -28,13 +28,48 @@ async function handleSocketToken(req: Request) {
       );
     }
 
-    // Authenticate user strictly from verified session (HTTP-only cookie or Authorization header)
-    const authUser = await getAuthUser(req);
-    if (!authUser) {
+    // Authenticate user strictly from verified session (HTTP-only cookie, Authorization header, or body token)
+    const { user: authUser, rawToken } = await extractAuthSession(req);
+    if (!authUser || !rawToken) {
+      console.warn(
+        `[Socket Token 401 Unauthorized] clientIp=${clientIp} reason="Missing or invalid session cookie/token"`
+      );
       return NextResponse.json(
         { error: 'Unauthorized: Valid session required to generate Socket.IO authentication token.' },
         { status: 401 }
       );
+    }
+
+    // If BACKEND_URL is configured (e.g. Vercel frontend talking to Render backend),
+    // proxy the session to Render by securely forwarding the Cookie and Authorization headers.
+    // This guarantees Render generates a token signed with Render's secret.
+    const isAlreadyProxied = Boolean(req.headers.get('x-socket-proxy'));
+    if (process.env.BACKEND_URL && !isAlreadyProxied) {
+      const cleanBackend = process.env.BACKEND_URL.replace(/\/$/, '');
+      try {
+        const proxyHeaders = new Headers();
+        proxyHeaders.set('Content-Type', 'application/json');
+        proxyHeaders.set('Cookie', `auth_token=${rawToken}`);
+        proxyHeaders.set('Authorization', `Bearer ${rawToken}`);
+        proxyHeaders.set('x-socket-proxy', '1');
+
+        const proxyRes = await fetch(`${cleanBackend}/api/auth/socket-token`, {
+          method: 'POST',
+          headers: proxyHeaders,
+          body: JSON.stringify({ authToken: rawToken }),
+        });
+
+        if (proxyRes.ok) {
+          const proxyData = await proxyRes.json();
+          return NextResponse.json(proxyData, { status: 200 });
+        } else if (proxyRes.status !== 404) {
+          console.warn(
+            `[Socket Token Proxy to Render Status ${proxyRes.status}] Falling back to local token generation.`
+          );
+        }
+      } catch (proxyErr) {
+        console.warn('[Socket Token Proxy Error] Falling back to local token generation:', proxyErr);
+      }
     }
 
     // Generate short-lived JWT token valid for 10 minutes (600 seconds)
@@ -72,3 +107,4 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   return handleSocketToken(req);
 }
+

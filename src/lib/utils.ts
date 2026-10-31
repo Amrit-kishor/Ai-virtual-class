@@ -4,15 +4,9 @@ export async function safeFetchJson<T = unknown>(
 ): Promise<{ ok: boolean; status: number; data?: T; error?: string }> {
   try {
     const headers = new Headers(options?.headers || {});
-    if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('auth_token');
-      if (token && !headers.has('Authorization')) {
-        headers.set('Authorization', `Bearer ${token}`);
-      }
-    }
     const res = await fetch(url, {
-      credentials: options?.credentials || 'include',
       ...options,
+      credentials: options?.credentials || 'include',
       headers,
     });
     const contentType = res.headers.get('content-type') || '';

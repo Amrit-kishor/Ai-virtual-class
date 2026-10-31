@@ -360,7 +360,10 @@ export default function ClassroomPage() {
       role: currentUserSession.role,
     };
 
+    let hasJoined = false;
     const emitJoin = () => {
+      if (hasJoined) return;
+      hasJoined = true;
       socket.emit('join-room', joinRoomPayload);
     };
 
@@ -376,7 +379,10 @@ export default function ClassroomPage() {
       }
     });
 
-    socket.on('connect', emitJoin);
+    socket.on('connect', () => {
+      hasJoined = false;
+      emitJoin();
+    });
 
     // Request LiveKit SFU Token for 50-Participant Video Conferencing
     const fetchLiveKitToken = async (code: string, currentSession: { id: string; name: string; role: string }) => {
