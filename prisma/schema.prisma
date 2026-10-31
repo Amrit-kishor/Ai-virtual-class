@@ -87,8 +87,9 @@ model Classroom {
   teacherId       String
   teacher         User           @relation("TeacherClassrooms", fields: [teacherId], references: [id])
   isEnded         Boolean        @default(false)
-  maxParticipants Int            @default(4)
+  maxParticipants Int            @default(50)
   syllabusText    String?
+
   createdAt       DateTime       @default(now())
 
   sessionState    SessionState?

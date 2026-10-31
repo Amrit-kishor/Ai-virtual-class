@@ -15,9 +15,10 @@ export const LoginSchema = z.object({
 
 export const CreateRoomSchema = z.object({
   title: z.string().min(3, 'Classroom title is required'),
-  maxParticipants: z.number().min(2).max(50).default(4),
+  maxParticipants: z.number().min(2).max(50).default(50),
   syllabusText: z.string().optional(),
 });
+
 
 export const CodeRunSchema = z.object({
   code: z.string().min(1, 'Code snippet is required'),

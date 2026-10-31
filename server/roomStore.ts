@@ -44,8 +44,9 @@ class RoomStoreManager {
     }
 
     let actualTeacherId = teacherId;
-    let maxParticipants = 4;
+    let maxParticipants = 50;
     let isEnded = false;
+
     let whiteboardElements: WhiteboardElement[] = [];
     let notesText = '# AI Classroom Notes\n\n- Class initialized.\n- Auto-notes active.';
     let topics: LectureTopic[] = [];

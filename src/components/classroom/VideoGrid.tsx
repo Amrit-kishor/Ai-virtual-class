@@ -61,8 +61,9 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
       <div className="flex items-center justify-between bg-slate-900/60 backdrop-blur-md px-3.5 py-2 rounded-xl border border-white/10 shrink-0">
         <div className="flex items-center gap-2 text-slate-300 text-xs font-semibold">
           <Users size={15} className="text-indigo-400" />
-          <span>Active Video Participants ({count} / 4 Max)</span>
+          <span>Active Video Participants ({count} / 50 Max)</span>
         </div>
+
         <div className="flex items-center gap-2">
           {mediaError ? (
             <button

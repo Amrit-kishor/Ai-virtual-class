@@ -19,7 +19,9 @@ import {
 
 import { LeftClassroomSidebar } from '@/components/classroom/LeftClassroomSidebar';
 import { VideoGrid } from '@/components/classroom/VideoGrid';
+import { LiveKitConference } from '@/components/classroom/LiveKitConference';
 import { AITeacherControl } from '@/components/classroom/AITeacherControl';
+
 import { Whiteboard } from '@/components/classroom/Whiteboard';
 import { ChatPanel } from '@/components/classroom/ChatPanel';
 import { PrivateAIDoubt } from '@/components/classroom/PrivateAIDoubt';
@@ -107,11 +109,18 @@ export default function ClassroomPage() {
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
   const [speakingStates, setSpeakingStates] = useState<Record<string, boolean>>({});
 
+  // LiveKit SFU 50-Participant Media State
+  const [livekitToken, setLivekitToken] = useState<string | null>(null);
+  const [livekitServerUrl, setLivekitServerUrl] = useState<string | null>(null);
+  const [isUsingLiveKit, setIsUsingLiveKit] = useState<boolean>(false);
+  const isUsingLiveKitRef = useRef<boolean>(false);
+
   // WebRTC References (Stored in Refs to prevent React re-render loops & state mutations)
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
   const audioDetectorsRef = useRef<Map<string, () => void>>(new Map());
+
 
   // Virtual Background & Video Segmentation Processor
   const [backgroundMode, setBackgroundMode] = useState<BackgroundMode>('original');
@@ -148,6 +157,10 @@ export default function ClassroomPage() {
 
   // Create or Recreate RTCPeerConnection for a Target Peer
   const createPeerConnection = (targetSocketId: string, isInitiator: boolean): RTCPeerConnection => {
+    // Suppress mesh peer connection creation if LiveKit SFU is active
+    if (isUsingLiveKitRef.current) {
+      return null as any;
+    }
     const socket = getSocket();
     const currentStream = localStreamRef.current;
 
@@ -348,6 +361,46 @@ export default function ClassroomPage() {
       role: currentUserSession.role,
     });
 
+    // Request LiveKit SFU Token for 50-Participant Video Conferencing
+    const fetchLiveKitToken = async (code: string, currentSession: { id: string; name: string; role: string }) => {
+      if (process.env.NEXT_PUBLIC_LIVEKIT_ENABLED === 'false') {
+        return;
+      }
+      try {
+        const res = await safeFetchJson<{ serverUrl: string; token: string; roomName: string }>('/api/livekit/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            roomCode: code,
+            identity: currentSession.id,
+            name: currentSession.name,
+          }),
+        });
+
+        if (res.ok && res.data?.token) {
+          setLivekitToken(res.data.token);
+          setLivekitServerUrl(res.data.serverUrl);
+          setIsUsingLiveKit(true);
+          isUsingLiveKitRef.current = true;
+
+          // Close and clean up any legacy mesh connections
+          peerConnectionsRef.current.forEach((pc) => {
+            try {
+              pc.close();
+            } catch (e) {
+              console.warn('[WebRTC mesh cleanup]', e);
+            }
+          });
+          peerConnectionsRef.current.clear();
+          pendingCandidatesRef.current.clear();
+        }
+      } catch (err) {
+        console.warn('[LiveKit Token Error] Falling back to WebRTC mesh:', err);
+      }
+    };
+
+    fetchLiveKitToken(roomCode, currentUserSession);
+
     // Socket Event Listeners
     socket.on('room-joined', (data) => {
       if (data.participants && data.participants.length > 0) {
@@ -386,8 +439,10 @@ export default function ClassroomPage() {
       const participant: Participant = data.participant || data;
       if (participant && participant.socketId && participant.socketId !== socket.id) {
         setParticipants((prev) => [...prev.filter((p) => p.socketId !== participant.socketId), participant]);
-        // Existing participant creates offer to newly joined participant
-        createPeerConnection(participant.socketId, true);
+        // Only initiate mesh WebRTC offer if LiveKit SFU is NOT active
+        if (!isUsingLiveKitRef.current) {
+          createPeerConnection(participant.socketId, true);
+        }
       }
     });
 
@@ -436,6 +491,7 @@ export default function ClassroomPage() {
 
     // Handle Incoming WebRTC Offer
     socket.on('webrtc-offer', async ({ senderSocketId, offer }: { senderSocketId: string; offer: RTCSessionDescriptionInit }) => {
+      if (isUsingLiveKitRef.current) return;
       try {
         let pc = peerConnectionsRef.current.get(senderSocketId);
         if (!pc || pc.signalingState === 'closed') {
@@ -470,6 +526,7 @@ export default function ClassroomPage() {
 
     // Handle Incoming WebRTC Answer
     socket.on('webrtc-answer', async ({ senderSocketId, answer }: { senderSocketId: string; answer: RTCSessionDescriptionInit }) => {
+      if (isUsingLiveKitRef.current) return;
       try {
         const pc = peerConnectionsRef.current.get(senderSocketId);
         if (pc && pc.signalingState !== 'closed') {
@@ -489,6 +546,7 @@ export default function ClassroomPage() {
 
     // Handle Incoming WebRTC ICE Candidate
     socket.on('webrtc-ice-candidate', async ({ senderSocketId, candidate }: { senderSocketId: string; candidate: RTCIceCandidateInit }) => {
+      if (isUsingLiveKitRef.current) return;
       try {
         const pc = peerConnectionsRef.current.get(senderSocketId);
         if (pc && pc.remoteDescription && pc.remoteDescription.type) {
@@ -1188,21 +1246,45 @@ export default function ClassroomPage() {
              <Layout size={12} />
           </button>
           {activeTab === 'video' && (
-            <VideoGrid
-              participants={participants}
-              currentUserId={user.id}
-              isCurrentUserTeacher={user.role === 'TEACHER'}
-              localStream={localStream}
-              remoteStreams={remoteStreams}
-              speakingStates={speakingStates}
-              isMuted={isMuted}
-              isVideoOff={isVideoOff}
-              mediaError={mediaError}
-              onRequestMediaPermissions={requestMediaPermissions}
-              onSpotlight={handleSpotlight}
-              onKickParticipant={handleKickParticipant}
-              onRemoteMute={handleRemoteMute}
-            />
+            isUsingLiveKit && livekitToken && livekitServerUrl ? (
+              <LiveKitConference
+                serverUrl={livekitServerUrl}
+                token={livekitToken}
+                roomCode={roomCode}
+                currentUserId={user.id}
+                currentUserName={user.name}
+                isCurrentUserTeacher={user.role === 'TEACHER'}
+                isMuted={isMuted}
+                isVideoOff={isVideoOff}
+                handState={handState}
+                onToggleHand={handleToggleHand}
+                onLeaveRoom={handleLeaveRoom}
+                onOpenBackgroundModal={() => setShowBackgroundModal(true)}
+                onRemoteMuteSocket={handleRemoteMute}
+                onKickParticipantSocket={(socketId, targetUserId, name) => handleKickParticipant(socketId, targetUserId, name)}
+                onMediaStateChange={(type, enabled) => {
+                  if (type === 'audio') setIsMuted(!enabled);
+                  if (type === 'video') setIsVideoOff(!enabled);
+                }}
+                raisedHandsUserIds={new Set(raisedHandsQueue.map((r) => r.userId))}
+              />
+            ) : (
+              <VideoGrid
+                participants={participants}
+                currentUserId={user.id}
+                isCurrentUserTeacher={user.role === 'TEACHER'}
+                localStream={localStream}
+                remoteStreams={remoteStreams}
+                speakingStates={speakingStates}
+                isMuted={isMuted}
+                isVideoOff={isVideoOff}
+                mediaError={mediaError}
+                onRequestMediaPermissions={requestMediaPermissions}
+                onSpotlight={handleSpotlight}
+                onKickParticipant={handleKickParticipant}
+                onRemoteMute={handleRemoteMute}
+              />
+            )
           )}
 
           {activeTab === 'teacher' && (
@@ -1348,8 +1430,10 @@ export default function ClassroomPage() {
       <footer className="h-16 bg-slate-900/95 backdrop-blur-md border-t border-white/10 px-6 flex items-center justify-between shrink-0 shadow-2xl z-30">
         {/* Left Status Indicator */}
         <div className="flex items-center gap-2 text-xs text-slate-400 font-medium">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="font-mono text-[11px] text-slate-300">Studio Mesh Connected</span>
+          <span className={`w-2 h-2 rounded-full animate-pulse ${isUsingLiveKit ? 'bg-indigo-400 shadow-[0_0_8px_rgba(99,102,241,0.6)]' : 'bg-emerald-500'}`} />
+          <span className="font-mono text-[11px] text-slate-300">
+            {isUsingLiveKit ? 'LiveKit SFU (50 Max)' : 'Studio Mesh Connected'}
+          </span>
         </div>
 
         {/* Center Primary Media Dock */}
