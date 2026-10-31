@@ -203,24 +203,27 @@ export async function POST(req: Request) {
         const proxyHeaders = new Headers();
         proxyHeaders.set('Content-Type', 'application/json');
 
-        const incomingCookie = req.headers.get('cookie');
-        if (incomingCookie) {
-          proxyHeaders.set('Cookie', incomingCookie);
-        }
-        const incomingAuth = req.headers.get('authorization');
-        if (incomingAuth) {
-          proxyHeaders.set('Authorization', incomingAuth);
-        }
+        const incomingCookie = req.headers.get('cookie') || '';
+        const cookieHeaderWithAuth = incomingCookie.includes('auth_token=')
+          ? incomingCookie
+          : incomingCookie
+          ? `${incomingCookie}; auth_token=${tokenToVerify}`
+          : `auth_token=${tokenToVerify}`;
+
+        proxyHeaders.set('Cookie', cookieHeaderWithAuth);
+        proxyHeaders.set('Authorization', `Bearer ${tokenToVerify}`);
 
         const proxyRes = await fetch(`${cleanBackend}/api/livekit/token`, {
           method: 'POST',
           headers: proxyHeaders,
-          body: JSON.stringify(body),
+          body: JSON.stringify({ ...body, authToken: tokenToVerify }),
         });
 
+        const proxyData = await proxyRes.json().catch(() => ({}));
         if (proxyRes.ok) {
-          const proxyData = await proxyRes.json();
           return NextResponse.json(proxyData, { status: 200 });
+        } else if (proxyRes.status !== 404) {
+          return NextResponse.json(proxyData, { status: proxyRes.status });
         }
       } catch (err: unknown) {
         console.error('[LiveKit Token Proxy to Render Error]', err);

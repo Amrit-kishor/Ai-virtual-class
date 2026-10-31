@@ -64,6 +64,19 @@ export async function POST(req: Request) {
       role: user.role as 'TEACHER' | 'STUDENT',
     });
 
+    const response = NextResponse.json({
+      user: { id: user.id, email: user.email, name: user.name, role: user.role },
+      token,
+    });
+
+    response.cookies.set('auth_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 86400,
+    });
+
     try {
       const cookieStore = await cookies();
       cookieStore.set('auth_token', token, {
@@ -73,14 +86,11 @@ export async function POST(req: Request) {
         path: '/',
         maxAge: 86400,
       });
-    } catch (e: unknown) {
-      // Ignore cookie set errors if headers already sent
+    } catch {
+      // Non-blocking fallback
     }
 
-    return NextResponse.json({
-      user: { id: user.id, email: user.email, name: user.name, role: user.role },
-      token,
-    });
+    return response;
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Internal signup error';
     return NextResponse.json({ error: msg }, { status: 500 });

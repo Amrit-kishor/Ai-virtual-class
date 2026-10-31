@@ -55,6 +55,33 @@ function LoginContent() {
     }
   };
 
+  const handleSocialLogin = async (socialEmail: string, socialName: string) => {
+    setError('');
+    setLoading(true);
+    try {
+      const result = await safeFetchJson<{ user: UserProfile; token: string }>('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: socialEmail, password: 'social_default_password_123!' }),
+      });
+
+      if (result.ok && result.data) {
+        localStorage.setItem('user_session', JSON.stringify(result.data.user));
+        if (result.data.token) {
+          localStorage.setItem('auth_token', result.data.token);
+        }
+        router.push('/dashboard');
+      } else {
+        throw new Error(result.error || 'Social authentication failed');
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Social authentication error';
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 relative overflow-hidden">
       {/* Glow Orbs */}
@@ -89,11 +116,10 @@ function LoginContent() {
         {mode !== 'forgot' && (
           <div className="grid grid-cols-2 gap-3">
             <button
-              onClick={() => {
-                localStorage.setItem('user_session', JSON.stringify({ id: 'g_user', name: 'Google User', email: 'user@google.com', role }));
-                router.push('/dashboard');
-              }}
-              className="bg-slate-900 hover:bg-slate-800 border border-white/10 text-slate-200 py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition"
+              type="button"
+              disabled={loading}
+              onClick={() => handleSocialLogin('google.student@classroom.ai', 'Google User')}
+              className="bg-slate-900 hover:bg-slate-800 border border-white/10 text-slate-200 py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition disabled:opacity-50"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24">
                 <path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.8 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.1 9 5 12 5z" />
@@ -104,11 +130,10 @@ function LoginContent() {
               Google
             </button>
             <button
-              onClick={() => {
-                localStorage.setItem('user_session', JSON.stringify({ id: 'gh_user', name: 'GitHub Developer', email: 'dev@github.com', role }));
-                router.push('/dashboard');
-              }}
-              className="bg-slate-900 hover:bg-slate-800 border border-white/10 text-slate-200 py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition"
+              type="button"
+              disabled={loading}
+              onClick={() => handleSocialLogin('github.developer@classroom.ai', 'GitHub Developer')}
+              className="bg-slate-900 hover:bg-slate-800 border border-white/10 text-slate-200 py-2.5 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition disabled:opacity-50"
             >
               <Github size={16} /> GitHub
             </button>

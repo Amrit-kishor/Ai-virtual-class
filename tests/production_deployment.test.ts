@@ -326,6 +326,63 @@ async function run() {
     assert.strictEqual(typeof personalAiModule.semanticSearch, 'function');
   });
 
+  // 11. Two Independently Authenticated Users (Teacher & Student) Join Same Classroom
+  await test('18. Two independently authenticated users (Teacher & Student) obtain LiveKit tokens for the same classroom', async () => {
+    // Student registration & login
+    const studentEmail = `student_${Date.now()}@classroom.ai`;
+    const signupReq = new Request('http://localhost:3000/api/auth/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Sarah Connor',
+        email: studentEmail,
+        password: 'student_password_secure_123!',
+        role: 'STUDENT',
+      }),
+    });
+    const signupRes = await signupRoute(signupReq);
+    assert.strictEqual(signupRes.status, 200);
+    const signupData = await signupRes.json();
+    const studentToken = signupData.token;
+    assert.ok(studentToken, 'Student must receive auth token');
+
+    // 1. Teacher requests LiveKit token with teacher cookie
+    const teacherReq = new Request('http://localhost:3000/api/livekit/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: `auth_token=${authToken}`,
+      },
+      body: JSON.stringify({ roomCode: createdRoomCode }),
+    });
+    const teacherRes = await livekitTokenRoute(teacherReq);
+    assert.strictEqual(teacherRes.status, 200);
+    const teacherData = await teacherRes.json();
+    assert.ok(teacherData.token, 'Teacher must receive LiveKit token');
+    assert.strictEqual(teacherData.participant.role, 'TEACHER');
+    assert.strictEqual(teacherData.roomName, createdRoomCode);
+
+    // 2. Student requests LiveKit token with student cookie
+    const studentReq = new Request('http://localhost:3000/api/livekit/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: `auth_token=${studentToken}`,
+      },
+      body: JSON.stringify({ roomCode: createdRoomCode }),
+    });
+    const studentRes = await livekitTokenRoute(studentReq);
+    assert.strictEqual(studentRes.status, 200);
+    const studentData = await studentRes.json();
+    assert.ok(studentData.token, 'Student must receive LiveKit token');
+    assert.strictEqual(studentData.participant.role, 'STUDENT');
+    assert.strictEqual(studentData.roomName, createdRoomCode);
+
+    // Both connected to identical room code with distinct identities
+    assert.notStrictEqual(teacherData.participant.identity, studentData.participant.identity);
+    assert.strictEqual(teacherData.serverUrl, studentData.serverUrl);
+  });
+
   console.log('\n======================================================');
   console.log('                   Test Results Summary');
   console.log('======================================================');
